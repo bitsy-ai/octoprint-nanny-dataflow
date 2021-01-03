@@ -100,13 +100,13 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--topic",
-        default="projects/print-nanny/topics/bounding-boxes-dev/windowed",
+        default="projects/print-nanny/topics/bounding-boxes-dev,
         help="PubSub topic to subscribe for bounding box predictions",
     )
 
     parser.add_argument(
         "--sink",
-        default="gs://print-nanny-dev/dataflow/bounding-box-events",
+        default="gs://print-nanny-dev/dataflow/bounding-box-events/windowed",
         help="Files will be output to this gcs bucket",
     )
 
