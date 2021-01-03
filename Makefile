@@ -14,5 +14,5 @@ dataflow-prod:
 	--runner DataflowRunner \
 	--topic projects/print-nanny/topics/bounding-boxes-prod \
 	--window 300 \
-	--sink gs://print-nanny-prod/dataflow/bounding-box-events/windowed/ \
+	--sink gs://print-nanny-prod/dataflow/bounding-box-events/windowed \
 	--loglevel INFO
