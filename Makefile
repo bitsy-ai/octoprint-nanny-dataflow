@@ -5,7 +5,7 @@ PYTHON=.venv/bin/python
 PIP=.venv/bin/pip
 
 local-dev:
-	$(PYTHON) windowed_tfrecords.py \
+	$(PYTHON) windowed_health.py \
 	--runner DirectRunner \
 	--loglevel DEBUG
 
