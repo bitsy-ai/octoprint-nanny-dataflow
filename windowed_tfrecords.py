@@ -100,7 +100,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--topic",
-        default="projects/print-nanny/topics/bounding-boxes-dev,
+        default="projects/print-nanny/topics/bounding-boxes-dev",
         help="PubSub topic to subscribe for bounding box predictions",
     )
 
