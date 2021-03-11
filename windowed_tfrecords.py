@@ -93,10 +93,7 @@ if __name__ == "__main__":
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
-    parser.add_argument(
-        "--loglevel",
-        default="INFO"
-    )
+    parser.add_argument("--loglevel", default="INFO")
 
     parser.add_argument(
         "--topic",
@@ -122,19 +119,13 @@ if __name__ == "__main__":
         help="Max number of bounding boxes output by nms operation",
     )
 
-    parser.add_argument(
-        "--runner",
-        default="DataflowRunner"
-    )
+    parser.add_argument("--runner", default="DataflowRunner")
 
     args, pipeline_args = parser.parse_known_args()
     logging.basicConfig(level=getattr(logging, args.loglevel))
 
     beam_options = PipelineOptions(
-        pipeline_args,
-        save_main_session=True,
-        streaming=True,
-        runner=args.runner
+        pipeline_args, save_main_session=True, streaming=True, runner=args.runner
     )
 
     tmp_sink = os.path.join(args.sink, "tmp")
