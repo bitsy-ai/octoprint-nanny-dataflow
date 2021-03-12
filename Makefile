@@ -7,7 +7,7 @@ PIP=.venv/bin/pip
 local-dev:
 	$(PYTHON) windowed_health.py \
 	--runner DirectRunner \
-	--loglevel DEBUG
+	--loglevel INFO
 
 dataflow-prod:
 	$(PYTHON) windowed_tfrecords.py \
