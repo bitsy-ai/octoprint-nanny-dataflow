@@ -14,9 +14,10 @@ class FlatTelemetryEvent(typing.NamedTuple):
     """
 
     ts: int
-    version: str
+    client_version: str
     event_type: int
     event_data_type: int
+    session: str
 
     # Image
     image_data: tf.Tensor
@@ -45,7 +46,8 @@ class FlatTelemetryEvent(typing.NamedTuple):
         return schema_utils.schema_from_feature_spec(
             {
                 "ts": tf.io.FixedLenFeature([], tf.float32),
-                "version": tf.io.FixedLenFeature([], tf.string),
+                "session": tf.io.FixedLenFeature([], tf.string),
+                "client_version": tf.io.FixedLenFeature([], tf.string),
                 "event_type": tf.io.FixedLenFeature([], tf.int64),
                 "event_data_type": tf.io.FixedLenFeature([], tf.int64),
                 "image_data": tf.io.FixedLenFeature([], tf.string),
@@ -92,9 +94,12 @@ class FlatTelemetryEvent(typing.NamedTuple):
             ]
         
         image_data = obj.eventData.image.data.tobytes()
+        with open(f'.tmp/sanity-check/{obj.metadata.ts}.jpg', 'wb') as f:
+            f.write(image_data)
         return cls(
             ts=obj.metadata.ts,
-            version=obj.version,
+            session=obj.metadata.session,
+            client_version=obj.metadata.clientVersion,
             event_type=obj.eventType,
             event_data_type=obj.eventDataType,
             image_height=obj.eventData.image.height,

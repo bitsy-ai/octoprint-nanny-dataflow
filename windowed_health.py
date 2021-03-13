@@ -149,14 +149,9 @@ class PredictBoundingBoxes(beam.DoFn):
             **defaults
         )]
 
-
-def add_image_tensor(element: FlatTelemetryEvent, input_shape: List[int]):
-    _, h, w, _ = input_shape
-
-    
-    im = PIL.Image.fromarray(element.image_data )
-    im.save(f".tmp/imgs/{element.device_id}_{element.ts}.jpg")
-    return element
+def is_print_healthy(elements):
+    import pdb; pdb.set_trace()
+    return elements
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -277,32 +272,17 @@ if __name__ == "__main__":
 
             )
 
-            # health_pipeline = (
-            #     parsed_dataset
-            #     | "Add Sliding Window"
-            #     >> beam.WindowInto(
-            #         window.SlidingWindows(
-            #             args.health_window_duration, args.health_window_interval
-            #         )
-            #     )
-            #     | "Add Sliding Window Info" >> beam.ParDo(AddWindowingInfoFn())
-            #     | "Group By Sliding Window" >> beam.GroupByKey()
-            #     # | "Calculate health score"
-            #     # | "Send alerts"
-            # )
-
             feature_spec = FlatTelemetryEvent.feature_spec(args.num_detections)
             metadata = FlatTelemetryEvent.tfrecord_metadata(feature_spec)
 
             prediction_pipeline = (
                 parsed_dataset
-                | "Add Fixed Window" >> beam.WindowInto(window.FixedWindows(args.tfrecord_fixed_window))
                 | "Add Bounding Box Prediction" >>  beam.ParDo(PredictBoundingBoxes(model_path))
             )
 
-            sink_pipeline = (
+            tfrecord_sink_pipeline = (
                 prediction_pipeline
-                # | "Convert to dict" >> beam.Map(lambda x: x._asdict())
+                | "Add Fixed Window" >> beam.WindowInto(window.FixedWindows(args.tfrecord_fixed_window))
                 | "Add Fixed Window Info" >> beam.ParDo(AddWindowingInfoFn())
                 | "Group by Window" >> beam.GroupByKey()
                 | "Write TFRecords" >> beam.ParDo(WriteWindowedTFRecords(args.sink, metadata.schema))
@@ -312,7 +292,8 @@ if __name__ == "__main__":
             health_pipeline = (
                 prediction_pipeline
                 | "Group by device_id" >> beam.GroupBy('device_id')
-                | "Print health groups" >> beam.Map(print)
+                | "Add Sliding Windows" >> beam.WindowInto(window.SlidingWindows(600, 10))
+                | "Print health groups" >> beam.Map(is_print_healthy)
             )
 
             # feature_spec = FlatTelemetryEvent.feature_spec(args.num_detections)
