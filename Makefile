@@ -7,7 +7,9 @@ PIP=.venv/bin/pip
 local-dev:
 	$(PYTHON) windowed_health.py \
 	--runner DirectRunner \
-	--loglevel INFO
+	--loglevel INFO \
+	--api-url="http://localhost:8000/api" \
+	--api-token=$$PRINT_NANNY_API_TOKEN
 
 dataflow-prod:
 	$(PYTHON) windowed_tfrecords.py \

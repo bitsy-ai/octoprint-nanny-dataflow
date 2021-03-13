@@ -19,7 +19,7 @@ class FlatTelemetryEvent(typing.NamedTuple):
     event_data_type: int
 
     # Image
-    image_data: bytes
+    image_data: tf.Tensor
     image_width: npt.Float32
     image_height: npt.Float32
 
@@ -36,6 +36,9 @@ class FlatTelemetryEvent(typing.NamedTuple):
     boxes_xmin: npt.NDArray[npt.Float32] = []
     boxes_ymax: npt.NDArray[npt.Float32] = []
     boxes_xmax: npt.NDArray[npt.Float32] = []
+    
+    image_tensor: tf.Tensor = None
+
 
     @staticmethod
     def feature_spec(num_detections):
@@ -52,9 +55,8 @@ class FlatTelemetryEvent(typing.NamedTuple):
                 "device_id": tf.io.FixedLenFeature([], tf.int64),
                 "device_cloudiot_id": tf.io.FixedLenFeature([], tf.int64),
                 "num_detections": tf.io.FixedLenFeature([], tf.float32),
-                "detection_classes": tf.io.FixedLenFeature([num_detections], tf.int64),
-                "detection_scores": tf.io.FixedLenFeature([num_detections], tf.float32),
-                "original_image": tf.io.FixedLenFeature([], tf.string),
+                "classes": tf.io.FixedLenFeature([num_detections], tf.int64),
+                "scores": tf.io.FixedLenFeature([num_detections], tf.float32),
                 "boxes_ymin": tf.io.FixedLenFeature([num_detections], tf.float32),
                 "boxes_xmin": tf.io.FixedLenFeature([num_detections], tf.float32),
                 "boxes_ymax": tf.io.FixedLenFeature([num_detections], tf.float32),
@@ -88,6 +90,8 @@ class FlatTelemetryEvent(typing.NamedTuple):
                 np.array([b.ymin, b.xmin, x.ymax, b.xmax])
                 for b in obj.eventData.boundingBoxes
             ]
+        
+        image_data = obj.eventData.image.data.tobytes()
         return cls(
             ts=obj.metadata.ts,
             version=obj.version,
@@ -95,7 +99,8 @@ class FlatTelemetryEvent(typing.NamedTuple):
             event_data_type=obj.eventDataType,
             image_height=obj.eventData.image.height,
             image_width=obj.eventData.image.width,
-            image_data=obj.eventData.image.data,
+            image_tensor=tf.expand_dims(tf.io.decode_jpeg(image_data), axis=0),
+            image_data=image_data,
             user_id=obj.metadata.userId,
             device_id=obj.metadata.deviceId,
             device_cloudiot_id=obj.metadata.deviceCloudiotId,
