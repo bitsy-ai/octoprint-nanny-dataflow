@@ -2,6 +2,8 @@
 
 from __future__ import absolute_import
 
+import pandas as pd
+from datetime import datetime
 import aiohttp
 import argparse
 import logging
@@ -25,6 +27,7 @@ from tensorflow_serving.apis import predict_pb2
 from encoders.tfrecord_example import ExampleProtoEncoder
 from encoders.types import FlatTelemetryEvent
 from clients.rest import RestAPIClient
+from beam_nuggets.io import relational_db
 
 logger = logging.getLogger(__name__)
 
@@ -62,13 +65,10 @@ class WriteWindowedTFRecords(beam.DoFn):
         self.outdir = outdir
         self.schema = schema
 
-    def process(self, element):
-        (window, elements) = element
-        window_start = str(window.start.to_rfc3339())
-        window_end = str(window.end.to_rfc3339())
-        output = os.path.join(self.outdir, f"{window_start}-{window_end}")
+    def process(self, elements):
         coder = ExampleProtoEncoder(self.schema)
-
+        ts = datetime.now().timestamp()
+        output =   os.path.join(self.outdir, ts)
         logger.info(f"Writing {output} with coder {coder}")
         yield (
             elements
@@ -100,6 +100,34 @@ async def download_active_experiment_model(tmp_dir='.tmp/', model_artifact_id=1)
     with tarfile.open(tmp_artifacts_tarball, "r:gz") as tar:
         tar.extractall(tmp_dir)
     logger.info(f"Finished extracting {tmp_artifacts_tarball}")
+
+class TelemetryEventStatefulFn(beam.DoFn):
+
+    # PREVIOUS_STATE= beam.transforms.userstate.BagStateSpec('previous_state', beam.coders.coders.Coder())
+    
+    UNHEALTHY_STATE = beam.transforms.userstate.CombiningValueStateSpec('unhealthy_state', beam.coders.coders.Coder(), combine_fn=sum)
+    MODEL_STATE = beam.transforms.userstate.BagStateSpec('model_state', beam.coders.coders.Coder())
+
+    def process(self, 
+        telemetry_event: FlatTelemetryEvent, 
+        model_state=beam.DoFn.StateParam(MODEL_STATE)
+    ):
+        device_id, event = telemetry_event
+
+        model = model_state.read()
+        if model is None:
+            model = PolyfitHealthModel()
+        
+        model.add(telemetry_event)
+
+
+        new_prediction = model.predict(event)
+        model_state.add(event)
+
+        previous_pred_state.clear()
+        previous_pred_state.add(new_prediction)
+        yield (user, new_prediction)
+
 
 class PredictBoundingBoxes(beam.DoFn):
     
@@ -231,6 +259,33 @@ if __name__ == "__main__":
         default=24,
     )
 
+    parser.add_argument(
+        "--postgres-host",
+        default="localhost",
+        help="Postgres host"
+    )
+
+    parser.add_argument(
+        "--postgres-port",
+        default=5432,
+        help="Postgres port"
+    )
+
+    parser.add_argument(
+        "--postgres-user",
+        default="debug"
+    )
+
+    parser.add_argument(
+        "--postgres-pass",
+        default="debug"
+    )
+
+    parser.add_argument(
+        "--postgres-db",
+        default="print_nanny"
+    )
+
 
     parser.add_argument("--runner", default="DataflowRunner")
 
@@ -275,39 +330,67 @@ if __name__ == "__main__":
             feature_spec = FlatTelemetryEvent.feature_spec(args.num_detections)
             metadata = FlatTelemetryEvent.tfrecord_metadata(feature_spec)
 
-            prediction_pipeline = (
+            box_annotations = (
                 parsed_dataset
-                | "Add Bounding Box Prediction" >>  beam.ParDo(PredictBoundingBoxes(model_path))
+                | "Add Bounding Box Annotations" >>  beam.ParDo(PredictBoundingBoxes(model_path))
             )
 
             tfrecord_sink_pipeline = (
-                prediction_pipeline
-                | "Add Fixed Window" >> beam.WindowInto(window.FixedWindows(args.tfrecord_fixed_window))
-                | "Add Fixed Window Info" >> beam.ParDo(AddWindowingInfoFn())
-                | "Group by Window" >> beam.GroupByKey()
+                box_annotations
+                | "Batch TFRecords" >> beam.transforms.util.BatchElements(min_batch_size=args.batch_size, max_batch_size=args.batch_size)
                 | "Write TFRecords" >> beam.ParDo(WriteWindowedTFRecords(args.sink, metadata.schema))
                 | "Print TFRecord paths" >> beam.Map(print)
             )
 
-            health_pipeline = (
-                prediction_pipeline
-                | "Group by device_id" >> beam.GroupBy('device_id')
-                | "Add Sliding Windows" >> beam.WindowInto(window.SlidingWindows(600, 10))
-                | "Print health groups" >> beam.Map(is_print_healthy)
+            health_models_by_device_id = (
+                box_annotations
+                | "Add Fixed Window" >> beam.WindowInto(window.FixedWindows(30))
+                | "Group by device_id, frame ts" >> beam.GroupBy(["device_id", "ts"])
+                | "Explode classes/scores with FlatMap" >> beam.FlatMap(lambda b: [Box(
+                    detection_score=b.detection_scores[i],
+                    detection_class=b.detection_classes[i],
+                    ymin=b.ymin[i],
+                    xmin=b.xmin[i],
+                    ymax=b.ymax[i],
+                    xmax=b.xmax[i]
+                ) for i in range(0, x.num_detections) ])
+
+                # | "Combine into health model" >> beam.core.CombinePerKey(TelemetryEventStatefulFn()))
             )
 
-            # feature_spec = FlatTelemetryEvent.feature_spec(args.num_detections)
-            # metadata = FlatTelemetryEvent.tfrecord_metadata(feature_spec)
-
-            # tfrecord_pipeline = (
-            #     windowed_pipeline
-            #     >> beam.ParDo(WriteWindowedTFRecords(args.sink, metadata.schema))
+            # @todo join device calibration
+            # source_config = relational_db.SourceConfiguration(
+            #     drivername='postgresql+psycopg2',
+            #     host=args.postgres_host=,
+            #     port=args.postgres_port,
+            #     username=args.postgres_user,
+            #     password=args.postgres_pass,
+            #     database=args.postgres_db,
+            #     create_if_missing=False,
+            # )
+            # table_config = relational_db.TableConfiguration(
+            #     name='client_events_monitoringframeevent',
+            #     create_if_missing=False
             # )
 
+            # image_sink_pipeline = (
+            #     prediction_pipeline
+            #     | "Write image bytes to gcs" >> 
+            # )
 
+            # postgres_sink_pipeline = (
+            #     prediction_pipeline
+            #     | "Reserialize as dict" >> beam.Map(lambda e: print_nanny_client.MonitoringFrameEvent(
+            #         device=e.device_id,
+            #         user=e.user_id,
+            #         ts=e.ts,
+            #         session=e.session,
 
-            # predict_pipeline = (
-            #     windowed_pipeline
-            #     | "Predict Bounding Boxes" >> beam.ParDo(PredictBoundingBoxes(model_path))
+            #     )
 
+            #     )
+            #     | "Save to Postgres" >> relational_db.Write(
+            #         source_config=source_config,
+            #         table_config=table_config
+            #     )
             # )

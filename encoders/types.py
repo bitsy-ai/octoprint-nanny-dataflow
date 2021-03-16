@@ -7,7 +7,39 @@ from tensorflow_transform.tf_metadata import dataset_metadata
 
 from print_nanny_client.telemetry_event import TelemetryEvent
 
-class FlatTelemetryEvent(typing.NamedTuple):
+from dataclasses import dataclass
+
+@dataclass
+class Image:
+    height: int
+    width: int
+    data: bytes
+    # ndarray: np.ndarray
+
+@dataclass
+class Box:
+    detection_score: npt.Float32
+    detection_class: npt.Int32
+    ymin: npt.Float32
+    xmin: npt.Float32
+    ymax: npt.Float32
+    xmax: npt.Float32
+    
+@dataclass
+class BoundingBoxAnnotation:
+    num_detections: int
+    detection_scores: np.ndarray
+    detection_boxes: np.ndarray
+    detection_classes: np.ndarray
+
+@dataclass
+class MonitoringFrame:
+    ts: int
+    image: Image
+    bounding_boxes: BoundingBoxAnnotation = None
+
+@dataclass
+class FlatTelemetryEvent:
     """
     flattened data structures for
     tensorflow_transform.tf_metadata.schema_utils.schema_from_feature_spec
@@ -30,13 +62,13 @@ class FlatTelemetryEvent(typing.NamedTuple):
     device_cloudiot_id: npt.Float32
 
     # BoundingBoxes
-    scores: npt.NDArray[npt.Float32] = []
-    classes: npt.NDArray[npt.Int32] = []
-    num_detections: npt.NDArray[npt.Int32] = []
-    boxes_ymin: npt.NDArray[npt.Float32] = []
-    boxes_xmin: npt.NDArray[npt.Float32] = []
-    boxes_ymax: npt.NDArray[npt.Float32] = []
-    boxes_xmax: npt.NDArray[npt.Float32] = []
+    scores: npt.NDArray[npt.Float32]
+    classes: npt.NDArray[npt.Int32]
+    num_detections: npt.NDArray[npt.Int32]
+    boxes_ymin: npt.NDArray[npt.Float32]
+    boxes_xmin: npt.NDArray[npt.Float32]
+    boxes_ymax: npt.NDArray[npt.Float32]
+    boxes_xmax: npt.NDArray[npt.Float32]
     
     image_tensor: tf.Tensor = None
 
