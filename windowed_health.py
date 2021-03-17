@@ -68,7 +68,7 @@ class WriteWindowedTFRecords(beam.DoFn):
     def process(self, elements):
         coder = ExampleProtoEncoder(self.schema)
         ts = datetime.now().timestamp()
-        output =   os.path.join(self.outdir, ts)
+        output =   os.path.join(self.outdir, str(ts))
         logger.info(f"Writing {output} with coder {coder}")
         yield (
             elements
@@ -170,8 +170,7 @@ class PredictBoundingBoxes(beam.DoFn):
             boxes_ymax = ymax,
             boxes_xmax = xmax
         )
-
-        defaults = element._asdict()
+        defaults = element.asdict()
         defaults.update(params)
         return [FlatTelemetryEvent(
             **defaults
@@ -299,7 +298,10 @@ if __name__ == "__main__":
     )
 
     # download model tarball
-    asyncio.run(download_active_experiment_model())
+    if args.runner == "DataflowRunner":
+        asyncio.run(download_active_experiment_model())
+
+
     # load input shape from model metadata
     model_path = os.path.join(args.tmp_dir, args.model_version, 'model.tflite')
     model_metadata_path = os.path.join(args.tmp_dir, args.model_version, 'tflite_metadata.json')
@@ -345,15 +347,15 @@ if __name__ == "__main__":
             health_models_by_device_id = (
                 box_annotations
                 | "Add Fixed Window" >> beam.WindowInto(window.FixedWindows(30))
-                | "Group by device_id, frame ts" >> beam.GroupBy(["device_id", "ts"])
+                | "Group by session" >> beam.GroupBy("session")
                 | "Explode classes/scores with FlatMap" >> beam.FlatMap(lambda b: [Box(
                     detection_score=b.detection_scores[i],
                     detection_class=b.detection_classes[i],
-                    ymin=b.ymin[i],
-                    xmin=b.xmin[i],
-                    ymax=b.ymax[i],
-                    xmax=b.xmax[i]
-                ) for i in range(0, x.num_detections) ])
+                    ymin=b[1].ymin[i],
+                    xmin=b[1].xmin[i],
+                    ymax=b[1].ymax[i],
+                    xmax=b[1].xmax[i]
+                ) for i in range(0, b[1].num_detections) ])
 
                 # | "Combine into health model" >> beam.core.CombinePerKey(TelemetryEventStatefulFn()))
             )

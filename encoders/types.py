@@ -7,7 +7,7 @@ from tensorflow_transform.tf_metadata import dataset_metadata
 
 from print_nanny_client.telemetry_event import TelemetryEvent
 
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 
 @dataclass
 class Image:
@@ -72,7 +72,6 @@ class FlatTelemetryEvent:
     
     image_tensor: tf.Tensor = None
 
-
     @staticmethod
     def feature_spec(num_detections):
         return schema_utils.schema_from_feature_spec(
@@ -126,8 +125,6 @@ class FlatTelemetryEvent:
             ]
         
         image_data = obj.eventData.image.data.tobytes()
-        with open(f'.tmp/sanity-check/{obj.metadata.ts}.jpg', 'wb') as f:
-            f.write(image_data)
         return cls(
             ts=obj.metadata.ts,
             session=obj.metadata.session,
@@ -149,3 +146,6 @@ class FlatTelemetryEvent:
             boxes_ymax=boxes_ymax,
             boxes_xmax=boxes_xmax,
         )
+
+    def asdict(self):
+        return asdict(self)
