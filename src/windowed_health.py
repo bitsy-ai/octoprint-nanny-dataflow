@@ -18,6 +18,7 @@ import tensorflow as tf
 import apache_beam as beam
 from typing import List
 from apache_beam import window
+from typing import Tuple
 from apache_beam.options.pipeline_options import GoogleCloudOptions
 from apache_beam.options.pipeline_options import PipelineOptions
 import PIL
@@ -48,6 +49,7 @@ NEGATIVE_LABELS = {
 
 POSITIVE_LABELS = {
     4: "print",
+
 }
 
 
@@ -101,32 +103,27 @@ async def download_active_experiment_model(tmp_dir='.tmp/', model_artifact_id=1)
         tar.extractall(tmp_dir)
     logger.info(f"Finished extracting {tmp_artifacts_tarball}")
 
-class TelemetryEventStatefulFn(beam.DoFn):
 
-    # PREVIOUS_STATE= beam.transforms.userstate.BagStateSpec('previous_state', beam.coders.coders.Coder())
-    
-    UNHEALTHY_STATE = beam.transforms.userstate.CombiningValueStateSpec('unhealthy_state', beam.coders.coders.Coder(), combine_fn=sum)
-    MODEL_STATE = beam.transforms.userstate.BagStateSpec('model_state', beam.coders.coders.Coder())
+class CalcHealthScoreStateful(beam.DoFn):
+
+    STALE_TIMER = beam.transforms.userstate.TimerSpec('stale', beam.TimeDomain.REAL_TIME)
+
+    # HEALTH_TREND = beam.transforms.userstate.CombiningValueStateSpec('health_score_acc', beam.coders.coders.Coder(), combine_fn=HealthScoreCombineFn)
+    UNHEALTHY_COUNT_ACC = beam.transforms.userstate.CombiningValueStateSpec('unhealthy_count_acc', beam.coders.coders.Coder(), combine_fn=sum)
+
+    def __init__(self, threshold=3):
+        self.threshold = threshold
 
     def process(self, 
-        telemetry_event: NestedTelemetryEvent, 
-        model_state=beam.DoFn.StateParam(MODEL_STATE)
+        elements 
     ):
-        device_id, event = telemetry_event
+        session, telemetry_events = elements
+        logger.info(session)
 
-        model = model_state.read()
-        if model is None:
-            model = PolyfitHealthModel()
+        import pdb; pdb.set_trace()
+        logger.info(telemetry_events)
+
         
-        model.add(telemetry_event)
-
-
-        new_prediction = model.predict(event)
-        model_state.add(event)
-
-        previous_pred_state.clear()
-        previous_pred_state.add(new_prediction)
-        yield (user, new_prediction)
 
 
 class PredictBoundingBoxes(beam.DoFn):
@@ -176,9 +173,7 @@ class PredictBoundingBoxes(beam.DoFn):
             **defaults
         )]
 
-def is_print_healthy(elements):
-    import pdb; pdb.set_trace()
-    return elements
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -343,14 +338,22 @@ if __name__ == "__main__":
                 | "Write TFRecords" >> beam.ParDo(WriteWindowedTFRecords(args.sink, metadata.schema))
                 | "Print TFRecord paths" >> beam.Map(print)
             )
-
+            
+            # @todo implement BoundedSession
+            # probably easier to port everything to Java before attempting this
+            # https://www.oreilly.com/library/view/streaming-systems/9781491983867/ch04.html
             health_models_by_device_id = (
                 box_annotations
-                | "Add Fixed Window" >> beam.WindowInto(window.FixedWindows(30))
-                | "Explode classes/scores with FlatMap" >> beam.FlatMap(lambda b: b.flatten()).with_output_types(FlatTelemetryEvent)
-                | "Group by session" >> beam.GroupBy("session")
-
-                # | "Combine into health model" >> beam.core.CombinePerKey(TelemetryEventStatefulFn()))
+                | "Drop image bytes/Tensor" >> beam.Map(lambda x: NestedTelemetryEvent.minimal(x))
+                # @todo implement area of interest filter
+                # | "Drop frames outside of calibration area of interest" >>
+                | "Key by session id" >> beam.Map(lambda x: (x.session, x))
+                | "Add Session Window" >> beam.WindowInto(
+                    window.Sessions(300),
+                    beam.transforms.trigger.Repeatedly(beam.transforms.trigger.AfterCount(3)),
+                    accumulation_mode=beam.transforms.trigger.AccumulationMode.ACCUMULATING)
+                | "Group by key" >> beam.GroupByKey()
+                | "Calculate health score trend" >>  beam.ParDo(CalcHealthScoreTrend())
             )
 
             # @todo join device calibration

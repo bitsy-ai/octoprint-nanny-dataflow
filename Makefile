@@ -5,7 +5,7 @@ PYTHON=.venv/bin/python
 PIP=.venv/bin/pip
 
 local-dev:
-	$(PYTHON) windowed_health.py \
+	$(PYTHON) src/windowed_health.py \
 	--runner DirectRunner \
 	--loglevel INFO \
 	--api-url="http://localhost:8000/api" \
@@ -18,3 +18,4 @@ dataflow-prod:
 	--window 300 \
 	--sink gs://print-nanny-prod/dataflow/bounding-box-events/windowed \
 	--loglevel INFO
+

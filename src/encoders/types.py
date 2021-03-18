@@ -9,6 +9,7 @@ from print_nanny_client.telemetry_event import TelemetryEvent
 
 from dataclasses import dataclass, asdict
 
+
 @dataclass
 class Image:
     height: int
@@ -84,11 +85,6 @@ class NestedTelemetryEvent:
     event_data_type: int
     session: str
 
-    # Image
-    image_data: tf.Tensor
-    image_width: npt.Float32
-    image_height: npt.Float32
-
     # Metadata
     user_id: npt.Float32
     device_id: npt.Float32
@@ -102,8 +98,12 @@ class NestedTelemetryEvent:
     boxes_xmin: npt.NDArray[npt.Float32]
     boxes_ymax: npt.NDArray[npt.Float32]
     boxes_xmax: npt.NDArray[npt.Float32]
-    
-    image_tensor: tf.Tensor
+
+    # Image
+    image_width: npt.Float32
+    image_height: npt.Float32
+    image_data: tf.Tensor = None
+    image_tensor: tf.Tensor = None
 
     @staticmethod
     def feature_spec(num_detections):
@@ -196,4 +196,9 @@ class NestedTelemetryEvent:
             box_xmax=self.boxes_xmax[i]
             ) for i in range(0, self.num_detections)
         )
-        
+    
+    @classmethod
+    def minimal(cls, instance):
+        exclude = ["image_data", "image_tensor"]
+        fieldset = instance.asdict()
+        return cls(**{k:v for k,v in fieldset.items() if k not in exclude})
