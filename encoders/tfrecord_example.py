@@ -1,6 +1,6 @@
 from tensorflow_transform.coders import example_proto_coder
 
-from .types import FlatTelemetryEvent
+from .types import NestedTelemetryEvent
 
 class ExampleProtoEncoder(example_proto_coder.ExampleProtoCoder):
     '''
@@ -45,7 +45,7 @@ class ExampleProtoEncoder(example_proto_coder.ExampleProtoCoder):
     def encode(self, instance):
         if isinstance(instance, dict):
             return self.encode_dict(instance)
-        elif isinstance(instance, FlatTelemetryEvent):
+        elif isinstance(instance, NestedTelemetryEvent):
             return self.encode_named_tuple(instance)
         else:
-            raise NotImplementedError(f'unsupported source data type {type(instance)} passed to ExampleProtoEncoder. Please use a <dict> or <typing.NamedTuple>')
+            raise NotImplementedError(f'unsupported source data type {type(instance)} passed to ExampleProtoEncoder. Please use a <dict> or <types.NestedTelemetryEvent>')

@@ -25,7 +25,7 @@ from tensorflow_transform.beam import impl as beam_impl
 from tensorflow_serving.apis import predict_pb2
 
 from encoders.tfrecord_example import ExampleProtoEncoder
-from encoders.types import FlatTelemetryEvent
+from encoders.types import NestedTelemetryEvent, FlatTelemetryEvent
 from clients.rest import RestAPIClient
 from beam_nuggets.io import relational_db
 
@@ -109,7 +109,7 @@ class TelemetryEventStatefulFn(beam.DoFn):
     MODEL_STATE = beam.transforms.userstate.BagStateSpec('model_state', beam.coders.coders.Coder())
 
     def process(self, 
-        telemetry_event: FlatTelemetryEvent, 
+        telemetry_event: NestedTelemetryEvent, 
         model_state=beam.DoFn.StateParam(MODEL_STATE)
     ):
         device_id, event = telemetry_event
@@ -162,9 +162,9 @@ class PredictBoundingBoxes(beam.DoFn):
         xmax = [ b[3] for b in box_data ]
 
         params = dict(
-            scores=score_data,
-            num_detections=num_detections,
-            classes=class_data,
+            detection_scores=score_data,
+            num_detections=int(num_detections),
+            detection_classes=class_data,
             boxes_ymin = ymin,
             boxes_xmin = xmin,
             boxes_ymax = ymax,
@@ -172,7 +172,7 @@ class PredictBoundingBoxes(beam.DoFn):
         )
         defaults = element.asdict()
         defaults.update(params)
-        return [FlatTelemetryEvent(
+        return [NestedTelemetryEvent(
             **defaults
         )]
 
@@ -321,16 +321,16 @@ if __name__ == "__main__":
                     topic=topic_path,
                 )
                 | "Deserialize Flatbuffer"
-                >> beam.Map(FlatTelemetryEvent.from_flatbuffer).with_output_types(
-                    FlatTelemetryEvent
+                >> beam.Map(NestedTelemetryEvent.from_flatbuffer).with_output_types(
+                    NestedTelemetryEvent
                 )
                 | "With timestamps"
                 >> beam.Map(lambda x: beam.window.TimestampedValue(x, x.ts))
 
             )
 
-            feature_spec = FlatTelemetryEvent.feature_spec(args.num_detections)
-            metadata = FlatTelemetryEvent.tfrecord_metadata(feature_spec)
+            feature_spec = NestedTelemetryEvent.feature_spec(args.num_detections)
+            metadata = NestedTelemetryEvent.tfrecord_metadata(feature_spec)
 
             box_annotations = (
                 parsed_dataset
@@ -347,15 +347,8 @@ if __name__ == "__main__":
             health_models_by_device_id = (
                 box_annotations
                 | "Add Fixed Window" >> beam.WindowInto(window.FixedWindows(30))
+                | "Explode classes/scores with FlatMap" >> beam.FlatMap(lambda b: b.flatten()).with_output_types(FlatTelemetryEvent)
                 | "Group by session" >> beam.GroupBy("session")
-                | "Explode classes/scores with FlatMap" >> beam.FlatMap(lambda b: [Box(
-                    detection_score=b.detection_scores[i],
-                    detection_class=b.detection_classes[i],
-                    ymin=b[1].ymin[i],
-                    xmin=b[1].xmin[i],
-                    ymax=b[1].ymax[i],
-                    xmax=b[1].xmax[i]
-                ) for i in range(0, b[1].num_detections) ])
 
                 # | "Combine into health model" >> beam.core.CombinePerKey(TelemetryEventStatefulFn()))
             )
