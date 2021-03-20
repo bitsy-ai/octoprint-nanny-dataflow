@@ -238,10 +238,11 @@ class NestedTelemetryEvent:
             **masked_fields
         )
     
-    def percent_intersection(self, detection_boxes: npt.NDArray[npt.Float32], aoi_coords: typing.Tuple[float]):
+    def percent_intersection(self, aoi_coords: typing.Tuple[float]):
         """
         Returns intersection-over-union area, normalized between 0 and 1
         """
+        detection_boxes = self.detection_boxes()
 
         # initialize array of zeroes
         aou = np.zeros(len(detection_boxes))
@@ -273,15 +274,17 @@ class NestedTelemetryEvent:
 
             aou[i] = intersection_area / box_area
 
-        return aou   
+        return aou
+
+    def detection_boxes(self):
+        return np.array([self.boxes_ymin, self.boxes_xmin, self.boxes_ymax, self.boxes_xmax ]).T
 
     def calibration_filter(self, aoi_coords, min_overlap_area:float=0.75):
 
-        detection_boxes = np.array([self.boxes_ymin, self.boxes.xmin, self.boxes.ymax, self.boxes.xmax ])
-
-        percent_intersection = self.percent_intersection(detection_boxes, aoi_coords)
+        percent_intersection = self.percent_intersection(aoi_coords)
         ignored_mask = percent_intersection <= min_overlap_area
 
+        detection_boxes = self.detection_boxes()
         included_mask = np.invert(ignored_mask)
         detection_boxes = np.squeeze(detection_boxes[included_mask])
         detection_scores = np.squeeze(self.detection_scores[included_mask])
@@ -291,11 +294,14 @@ class NestedTelemetryEvent:
 
         filter_fields = ["detection_scores", "detection_classes", "boxes_ymin", "boxes_xmin", "boxes_ymax", "boxes_xmax", "num_detections"]
         default_fieldset = {k:v for k,v in self.asdict().items() if k not in filter_fields}
-        boxes_ymin, boxes_xmin, boxes_ymax, boxes_xmax = detection_boxes
-        return self.__init__(
+        boxes_ymin, boxes_xmin, boxes_ymax, boxes_xmax = detection_boxes.T
+        return self.__class__(
+            detection_scores=detection_scores,
+            detection_classes=detection_classes,
+            num_detections=num_detections,
             boxes_ymin=boxes_ymin,
             boxes_xmin=boxes_xmin,
             boxes_ymax=boxes_ymax,
-            boxes_xmax=boxes_xmax
+            boxes_xmax=boxes_xmax,
             **default_fieldset
         )

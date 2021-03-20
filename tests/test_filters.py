@@ -3,12 +3,11 @@ import numpy as np
 import print_nanny_dataflow
 from print_nanny_dataflow.encoders.types import NestedTelemetryEvent
 
+ 
 def test_area_of_intersection_overlap(partial_nested_telemetry_event_kwargs):
 
     detection_boxes = np.array([[0.3, 0.3, 0.9, 0.9]])
     boxes_ymin, boxes_xmin, boxes_ymax, boxes_xmax = detection_boxes.T
-
-    # detection_boxes = np.array([[0.3, 0.3, 0.9, 0.9]])
 
     calibration_box = [0.2, 0.2, 0.8, 0.8]
 
@@ -27,9 +26,12 @@ def test_area_of_intersection_overlap(partial_nested_telemetry_event_kwargs):
 
     )
 
-    percent_area = event.percent_intersection(detection_boxes, calibration_box)
+    percent_area = event.percent_intersection(calibration_box)
     expected = (0.5 ** 2) / (0.6 ** 2)
     np.testing.assert_almost_equal(percent_area[0], expected)
+
+    filtered_event = event.calibration_filter(calibration_box, min_overlap_area=0.66)
+    assert event == filtered_event
 
 
 def test_area_of_intersection_no_overlap_0(partial_nested_telemetry_event_kwargs):
@@ -55,10 +57,18 @@ def test_area_of_intersection_no_overlap_0(partial_nested_telemetry_event_kwargs
 
     )
 
-    percent_area = event.percent_intersection(detection_boxes, calibration_box)
+    percent_area = event.percent_intersection( calibration_box)
     expected = 0.0
     np.testing.assert_almost_equal(percent_area[0], expected)
+    filtered_event = event.calibration_filter(calibration_box)
 
+    assert filtered_event.num_detections == 0
+    assert len(filtered_event.detection_scores) == 0
+    assert len(filtered_event.detection_classes) == 0
+    assert len(filtered_event.boxes_ymin) == 0
+    assert len(filtered_event.boxes_xmin) == 0
+    assert len(filtered_event.boxes_ymax) == 0
+    assert len(filtered_event.boxes_xmax) == 0
 
 def test_area_of_intersection_no_overlap_1(partial_nested_telemetry_event_kwargs):
     detection_boxes = np.array([[0.5, 0.2, 0.9, 0.4]])
@@ -82,10 +92,18 @@ def test_area_of_intersection_no_overlap_1(partial_nested_telemetry_event_kwargs
     )
 
 
-    percent_area = event.percent_intersection(detection_boxes, calibration_box)
+    percent_area = event.percent_intersection(calibration_box)
     expected = 0.0
     np.testing.assert_almost_equal(percent_area[0], expected)
+    filtered_event = event.calibration_filter(calibration_box)
 
+    assert filtered_event.num_detections == 0
+    assert len(filtered_event.detection_scores) == 0
+    assert len(filtered_event.detection_classes) == 0
+    assert len(filtered_event.boxes_ymin) == 0
+    assert len(filtered_event.boxes_xmin) == 0
+    assert len(filtered_event.boxes_ymax) == 0
+    assert len(filtered_event.boxes_xmax) == 0
 
 def test_area_of_intersection_prediction_contained_0(partial_nested_telemetry_event_kwargs):
 
@@ -110,9 +128,13 @@ def test_area_of_intersection_prediction_contained_0(partial_nested_telemetry_ev
     )
 
 
-    percent_area = event.percent_intersection(detection_boxes, calibration_box)
+    percent_area = event.percent_intersection(calibration_box)
     expected = 1.0
     np.testing.assert_almost_equal(percent_area[0], expected)
+
+    filtered_event = event.calibration_filter(calibration_box)
+
+    assert event == filtered_event
 
 
 # def test_print_health_trend_increasing(partial_nested_telemetry_event_kwargs):
