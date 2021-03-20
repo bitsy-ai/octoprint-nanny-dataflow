@@ -50,8 +50,8 @@ NEGATIVE_LABELS = {
 
 POSITIVE_LABELS = {
     4: "print",
-
 }
+
 
 class WriteBatchedTFRecords(beam.DoFn):
     """write one file per window/key"""
@@ -64,7 +64,7 @@ class WriteBatchedTFRecords(beam.DoFn):
         key, elements = element
         coder = ExampleProtoEncoder(self.schema)
         ts = int(datetime.now().timestamp())
-        output =   os.path.join(self.outdir, key, str(ts))
+        output = os.path.join(self.outdir, key, str(ts))
         logger.info(f"Writing {output} with coder {coder}")
         yield (
             elements
@@ -77,9 +77,10 @@ class WriteBatchedTFRecords(beam.DoFn):
             )
         )
 
-async def download_active_experiment_model(tmp_dir='.tmp/', model_artifact_id=1):
 
-    tmp_artifacts_tarball = os.path.join(tmp_dir, 'artifacts.tar.gz')
+async def download_active_experiment_model(tmp_dir=".tmp/", model_artifact_id=1):
+
+    tmp_artifacts_tarball = os.path.join(tmp_dir, "artifacts.tar.gz")
     rest_client = RestAPIClient(api_token=args.api_token, api_url=args.api_url)
 
     model_artifacts = await rest_client.get_model_artifact(model_artifact_id)
@@ -88,11 +89,9 @@ async def download_active_experiment_model(tmp_dir='.tmp/', model_artifact_id=1)
         logger.info(f"Downloading model artfiact tarball")
         async with session.get(model_artifacts.artifacts) as res:
             artifacts_gzipped = await res.read()
-            with open(tmp_artifacts_tarball, 'wb+') as f:
+            with open(tmp_artifacts_tarball, "wb+") as f:
                 f.write(artifacts_gzipped)
-            logger.info(
-                f"Finished writing {tmp_artifacts_tarball}"
-            )
+            logger.info(f"Finished writing {tmp_artifacts_tarball}")
     with tarfile.open(tmp_artifacts_tarball, "r:gz") as tar:
         tar.extractall(tmp_dir)
     logger.info(f"Finished extracting {tmp_artifacts_tarball}")
@@ -100,35 +99,41 @@ async def download_active_experiment_model(tmp_dir='.tmp/', model_artifact_id=1)
 
 class CalcHealthScoreTrend(beam.DoFn):
 
-    STALE_TIMER = beam.transforms.userstate.TimerSpec('stale', beam.TimeDomain.REAL_TIME)
+    STALE_TIMER = beam.transforms.userstate.TimerSpec(
+        "stale", beam.TimeDomain.REAL_TIME
+    )
 
     # HEALTH_TREND = beam.transforms.userstate.CombiningValueStateSpec('health_score_acc', beam.coders.coders.Coder(), combine_fn=HealthScoreCombineFn)
-    UNHEALTHY_COUNT_ACC = beam.transforms.userstate.CombiningValueStateSpec('unhealthy_count_acc', combine_fn=sum)
+    UNHEALTHY_COUNT_ACC = beam.transforms.userstate.CombiningValueStateSpec(
+        "unhealthy_count_acc", combine_fn=sum
+    )
 
-    def __init__(self, score_threshold=0.5, health_threshold=3, ):
+    def __init__(
+        self,
+        score_threshold=0.5,
+        health_threshold=3,
+    ):
         self.score_threshold = score_threshold
         self.health_threshold = health_threshold
 
-    def process(self, 
-        elements,
-        unhealthy_count_acc = beam.DoFn.StateParam(UNHEALTHY_COUNT_ACC)
+    def process(
+        self, elements, unhealthy_count_acc=beam.DoFn.StateParam(UNHEALTHY_COUNT_ACC)
     ):
         session, telemetry_events = elements
         logger.info(session)
         unhealthy_count_acc.add(1)
-        import pdb; pdb.set_trace()
-        yield session, telemetry_events
+        import pdb
 
-        
+        pdb.set_trace()
+        yield session, telemetry_events
 
 
 class PredictBoundingBoxes(beam.DoFn):
-    
     def __init__(self, model_path):
-        self.model_path = model_path 
+        self.model_path = model_path
 
     def process(self, element):
-        
+
         tflite_interpreter = tf.lite.Interpreter(model_path=self.model_path)
         tflite_interpreter.allocate_tensors()
         input_details = tflite_interpreter.get_input_details()
@@ -140,42 +145,43 @@ class PredictBoundingBoxes(beam.DoFn):
 
         class_data = tflite_interpreter.get_tensor(output_details[1]["index"])
         score_data = tflite_interpreter.get_tensor(output_details[2]["index"])
-        num_detections = tflite_interpreter.get_tensor(
-            output_details[3]["index"]
-        )
+        num_detections = tflite_interpreter.get_tensor(output_details[3]["index"])
 
         class_data = np.squeeze(class_data, axis=0).astype(np.int64) + 1
         box_data = np.squeeze(box_data, axis=0)
         score_data = np.squeeze(score_data, axis=0)
         num_detections = np.squeeze(num_detections, axis=0)
 
-        ymin = [ b[0] for b in box_data]
-        xmin = [ b[1] for b in box_data ]
-        ymax = [ b[2] for b in box_data ]
-        xmax = [ b[3] for b in box_data ]
+        ymin = [b[0] for b in box_data]
+        xmin = [b[1] for b in box_data]
+        ymax = [b[2] for b in box_data]
+        xmax = [b[3] for b in box_data]
 
         params = dict(
             detection_scores=score_data,
             num_detections=int(num_detections),
             detection_classes=class_data,
-            boxes_ymin = ymin,
-            boxes_xmin = xmin,
-            boxes_ymax = ymax,
-            boxes_xmax = xmax
+            boxes_ymin=ymin,
+            boxes_xmin=xmin,
+            boxes_ymax=ymax,
+            boxes_xmax=xmax,
         )
         defaults = element.asdict()
         defaults.update(params)
-        return [NestedTelemetryEvent(
-            **defaults
-        )]
+        return [NestedTelemetryEvent(**defaults)]
 
 
 class FilterDetections(beam.DoFn):
-    def __init__(self, calibration_base_path: str, score_threshold: float = 0.5, calibration_filename: str = 'calibration.json'):
+    def __init__(
+        self,
+        calibration_base_path: str,
+        score_threshold: float = 0.5,
+        calibration_filename: str = "calibration.json",
+    ):
         self.score_threshold = 0.5
         self.calibration_filename = calibration_filename
         self.calibration_base_path = calibration_base_path
-    
+
     def process(self, row):
         session, event = row
 
@@ -183,19 +189,19 @@ class FilterDetections(beam.DoFn):
 
         device_id = elements[0].device_id
         device_calibration_path = os.path.join(
-            self.calibration_base_path,
-            device_id,
-            self.calibration_filename
+            self.calibration_base_path, device_id, self.calibration_filename
         )
-        device_calibration_path = f'gcs://{device_calibration_path}'
+        device_calibration_path = f"gcs://{device_calibration_path}"
 
         event = event.min_score_filter(event, score_threshold=self.score_threshold)
 
         if gcs_client.exists(device_calibration_path):
-            with gcs_client.open(device_calibration_path, 'r') as f:
-                logger.info(f"Loading device calibration from {device_calibration_path}")
+            with gcs_client.open(device_calibration_path, "r") as f:
+                logger.info(
+                    f"Loading device calibration from {device_calibration_path}"
+                )
                 calibration_json = json.load(f)
-            
+
             coordinates = calibration_json["coordinates"]
             event = NestedTelemetryEvent.calibration_filter(event, coordinates)
 
@@ -204,29 +210,21 @@ class FilterDetections(beam.DoFn):
 
         return window, elements
 
-class WriteBatchedParquet(beam.DoFn):
 
+class WriteBatchedParquet(beam.DoFn):
     def __init__(self, parquet_base_path: str, schema: pa.Schema, batch_size: int):
         self.parquet_base_path = parquet_base_path
         self.batch_size = batch_size
         self.schema = schema
-    
+
     def process(self, batched_elements: List[Tuple[str, NestedTelemetryEvent]]):
 
         session, elements = batched_elements
         output_path = os.path.join(
-            self.parquet_base_path,
-            session,
-            int(datetime.now().timestamp())
+            self.parquet_base_path, session, int(datetime.now().timestamp())
         )
 
-        yield (
-            elements
-            | beam.io.parquetio.WriteToParquet(
-                output_path,
-                self.schema
-            )
-        )
+        yield (elements | beam.io.parquetio.WriteToParquet(output_path, self.schema))
 
 
 def run_pipeline(args, pipeline_args):
@@ -241,12 +239,13 @@ def run_pipeline(args, pipeline_args):
     if args.runner == "DataflowRunner":
         asyncio.run(download_active_experiment_model())
 
-
     # load input shape from model metadata
-    model_path = os.path.join(args.tmp_dir, args.model_version, 'model.tflite')
-    model_metadata_path = os.path.join(args.tmp_dir, args.model_version, 'tflite_metadata.json')
-    model_metadata = json.load(open(model_metadata_path, 'r'))
-    input_shape = model_metadata['inputShape']
+    model_path = os.path.join(args.tmp_dir, args.model_version, "model.tflite")
+    model_metadata_path = os.path.join(
+        args.tmp_dir, args.model_version, "tflite_metadata.json"
+    )
+    model_metadata = json.load(open(model_metadata_path, "r"))
+    input_shape = model_metadata["inputShape"]
     # any batch size
     input_shape[0] = None
 
@@ -273,26 +272,43 @@ def run_pipeline(args, pipeline_args):
 
             box_annotations = (
                 parsed_dataset
-                | "Add Bounding Box Annotations" >>  beam.ParDo(PredictBoundingBoxes(model_path))
+                | "Add Bounding Box Annotations"
+                >> beam.ParDo(PredictBoundingBoxes(model_path))
                 | "Key by session id" >> beam.Map(lambda x: (x.session, x))
             )
 
             tfrecord_sink_pipeline = (
                 box_annotations
-                | "Batch TFRecords" >> beam.transforms.util.BatchElements(min_batch_size=args.batch_size, max_batch_size=args.batch_size)
-                | "Write TFRecords" >> beam.ParDo(WriteBatchedTFRecords(args.tfrecord_sink, metadata.schema))
+                | "Batch TFRecords"
+                >> beam.transforms.util.BatchElements(
+                    min_batch_size=args.batch_size, max_batch_size=args.batch_size
+                )
+                | "Write TFRecords"
+                >> beam.ParDo(
+                    WriteBatchedTFRecords(args.tfrecord_sink, metadata.schema)
+                )
                 | "Print TFRecord paths" >> beam.Map(print)
             )
 
             parquet_sink_pipeline = (
                 box_annotations
-                | "Batch Parquet" >> beam.transforms.util.BatchElements(min_batch_size=args.batch_size, max_batch_size=args.batch_size)
-                | "Write Parquet" >> beam.ParDo(WriteBatchedParquet(args.parquet_sink, schema=NestedTelemetryEvent.pyarrow_schema(args.num_detections), batch_size=args.batch_size))
+                | "Batch Parquet"
+                >> beam.transforms.util.BatchElements(
+                    min_batch_size=args.batch_size, max_batch_size=args.batch_size
+                )
+                | "Write Parquet"
+                >> beam.ParDo(
+                    WriteBatchedParquet(
+                        args.parquet_sink,
+                        schema=NestedTelemetryEvent.pyarrow_schema(args.num_detections),
+                        batch_size=args.batch_size,
+                    )
+                )
             )
 
             # @ todo sink annotated frames to GCS for video reconstruction
             # annotated_image_sink_pipeline = ()
-            
+
             # @todo implement BoundedSession
             # probably easier to port everything to Java before attempting this
             # https://www.oreilly.com/library/view/streaming-systems/9781491983867/ch04.html
@@ -300,16 +316,19 @@ def run_pipeline(args, pipeline_args):
                 box_annotations
                 | "Drop image bytes/Tensor" >> beam.Map(lambda x: x.drop_image_data())
                 # @todo implement area of interest filter
-                | "Add Session Window" >> beam.WindowInto(
+                | "Add Session Window"
+                >> beam.WindowInto(
                     window.Sessions(300),
-                    beam.transforms.trigger.Repeatedly(beam.transforms.trigger.AfterCount(3)),
-                    accumulation_mode=beam.transforms.trigger.AccumulationMode.DISCARDING)
+                    beam.transforms.trigger.Repeatedly(
+                        beam.transforms.trigger.AfterCount(3)
+                    ),
+                    accumulation_mode=beam.transforms.trigger.AccumulationMode.DISCARDING,
+                )
                 | "Group by key" >> beam.GroupByKey()
-                | "Drop detections outside of calibration area of interest" >>  beam.ParDo(FilterDetections(
-                    args.calibration_base_path,
-                    score_threshold=0.5
-                    ))
-
+                | "Drop detections outside of calibration area of interest"
+                >> beam.ParDo(
+                    FilterDetections(args.calibration_base_path, score_threshold=0.5)
+                )
                 # | "Calculate health score trend" >>  beam.ParDo(CalcHealthScoreTrend(score_threshold=0.5, health_threshold=3))
             )
 
@@ -383,60 +402,33 @@ if __name__ == "__main__":
         help="Max number of bounding boxes output by nms operation",
     )
 
-    parser.add_argument(
-        "--api-token",
-        help="Print Nanny API token"
-    )
+    parser.add_argument("--api-token", help="Print Nanny API token")
 
     parser.add_argument(
-        "--api-url",
-        default="https://print-nanny.com/api",
-        help="Print Nanny API url"
+        "--api-url", default="https://print-nanny.com/api", help="Print Nanny API url"
     )
 
     parser.add_argument(
         "--model-version",
-        default="tflite-print3d_20201101015829-2021-02-24T05:16:05.082500Z"
+        default="tflite-print3d_20201101015829-2021-02-24T05:16:05.082500Z",
     )
 
-    parser.add_argument(
-        "--tmp-dir",
-        default=".tmp/",
-        help="Filesystem tmp directory"
-    )
+    parser.add_argument("--tmp-dir", default=".tmp/", help="Filesystem tmp directory")
 
     parser.add_argument(
         "--batch-size",
         default=24,
     )
 
-    parser.add_argument(
-        "--postgres-host",
-        default="localhost",
-        help="Postgres host"
-    )
+    parser.add_argument("--postgres-host", default="localhost", help="Postgres host")
 
-    parser.add_argument(
-        "--postgres-port",
-        default=5432,
-        help="Postgres port"
-    )
+    parser.add_argument("--postgres-port", default=5432, help="Postgres port")
 
-    parser.add_argument(
-        "--postgres-user",
-        default="debug"
-    )
+    parser.add_argument("--postgres-user", default="debug")
 
-    parser.add_argument(
-        "--postgres-pass",
-        default="debug"
-    )
+    parser.add_argument("--postgres-pass", default="debug")
 
-    parser.add_argument(
-        "--postgres-db",
-        default="print_nanny"
-    )
-
+    parser.add_argument("--postgres-db", default="print_nanny")
 
     parser.add_argument("--runner", default="DataflowRunner")
 
@@ -444,39 +436,39 @@ if __name__ == "__main__":
 
     run_pipeline(args, pipeline_args)
 
-            # @todo join device calibration
-            # source_config = relational_db.SourceConfiguration(
-            #     drivername='postgresql+psycopg2',
-            #     host=args.postgres_host=,
-            #     port=args.postgres_port,
-            #     username=args.postgres_user,
-            #     password=args.postgres_pass,
-            #     database=args.postgres_db,
-            #     create_if_missing=False,
-            # )
-            # table_config = relational_db.TableConfiguration(
-            #     name='client_events_monitoringframeevent',
-            #     create_if_missing=False
-            # )
+    # @todo join device calibration
+    # source_config = relational_db.SourceConfiguration(
+    #     drivername='postgresql+psycopg2',
+    #     host=args.postgres_host=,
+    #     port=args.postgres_port,
+    #     username=args.postgres_user,
+    #     password=args.postgres_pass,
+    #     database=args.postgres_db,
+    #     create_if_missing=False,
+    # )
+    # table_config = relational_db.TableConfiguration(
+    #     name='client_events_monitoringframeevent',
+    #     create_if_missing=False
+    # )
 
-            # image_sink_pipeline = (
-            #     prediction_pipeline
-            #     | "Write image bytes to gcs" >> 
-            # )
+    # image_sink_pipeline = (
+    #     prediction_pipeline
+    #     | "Write image bytes to gcs" >>
+    # )
 
-            # postgres_sink_pipeline = (
-            #     prediction_pipeline
-            #     | "Reserialize as dict" >> beam.Map(lambda e: print_nanny_client.MonitoringFrameEvent(
-            #         device=e.device_id,
-            #         user=e.user_id,
-            #         ts=e.ts,
-            #         session=e.session,
+    # postgres_sink_pipeline = (
+    #     prediction_pipeline
+    #     | "Reserialize as dict" >> beam.Map(lambda e: print_nanny_client.MonitoringFrameEvent(
+    #         device=e.device_id,
+    #         user=e.user_id,
+    #         ts=e.ts,
+    #         session=e.session,
 
-            #     )
+    #     )
 
-            #     )
-            #     | "Save to Postgres" >> relational_db.Write(
-            #         source_config=source_config,
-            #         table_config=table_config
-            #     )
-            # )
+    #     )
+    #     | "Save to Postgres" >> relational_db.Write(
+    #         source_config=source_config,
+    #         table_config=table_config
+    #     )
+    # )

@@ -18,6 +18,7 @@ class Image:
     data: bytes
     # ndarray: np.ndarray
 
+
 @dataclass
 class Box:
     detection_score: npt.Float32
@@ -26,7 +27,8 @@ class Box:
     xmin: npt.Float32
     ymax: npt.Float32
     xmax: npt.Float32
-    
+
+
 @dataclass
 class BoundingBoxAnnotation:
     num_detections: int
@@ -34,11 +36,13 @@ class BoundingBoxAnnotation:
     detection_boxes: np.ndarray
     detection_classes: np.ndarray
 
+
 @dataclass
 class MonitoringFrame:
     ts: int
     image: Image
     bounding_boxes: BoundingBoxAnnotation = None
+
 
 @dataclass
 class FlatTelemetryEvent:
@@ -72,6 +76,7 @@ class FlatTelemetryEvent:
     box_ymax: npt.Float32
     box_xmax: npt.Float32
     image_tensor: tf.Tensor
+
 
 @dataclass
 class NestedTelemetryEvent:
@@ -108,26 +113,39 @@ class NestedTelemetryEvent:
 
     @staticmethod
     def pyarrow_schema(num_detections):
-       return pa.schema([
-            pa.field("boxes_xmax", pa.list_(pa.float32(), list_size=num_detections)),
-            pa.field("boxes_xmin", pa.list_(pa.float32(), list_size=num_detections)),
-            pa.field("boxes_ymax", pa.list_(pa.float32(), list_size=num_detections)),
-            pa.field("boxes_ymin", pa.list_(pa.float32(), list_size=num_detections)),
-            pa.field("client_version", pa.string()),
-            pa.field("detection_classes", pa.list_(pa.int32(), list_size=num_detections)),
-            pa.field("detection_scores", pa.list_(pa.float32(), list_size=num_detections)),
-            pa.field("device_cloudiot_id", pa.int32()),
-            pa.field("device_id", pa.int32()),
-            pa.field("event_data_type", pa.string()),
-            pa.field("event_type", pa.string()),
-            pa.field("image_data", pa.binary()),
-            pa.field("image_height", pa.int32()),
-            pa.field("image_width", pa.int32()),
-            pa.field("num_detections", pa.int32()),
-            pa.field("ts", pa.int32()),
-            pa.field("user_id", pa.int32()),
-
-       ])
+        return pa.schema(
+            [
+                pa.field(
+                    "boxes_xmax", pa.list_(pa.float32(), list_size=num_detections)
+                ),
+                pa.field(
+                    "boxes_xmin", pa.list_(pa.float32(), list_size=num_detections)
+                ),
+                pa.field(
+                    "boxes_ymax", pa.list_(pa.float32(), list_size=num_detections)
+                ),
+                pa.field(
+                    "boxes_ymin", pa.list_(pa.float32(), list_size=num_detections)
+                ),
+                pa.field("client_version", pa.string()),
+                pa.field(
+                    "detection_classes", pa.list_(pa.int32(), list_size=num_detections)
+                ),
+                pa.field(
+                    "detection_scores", pa.list_(pa.float32(), list_size=num_detections)
+                ),
+                pa.field("device_cloudiot_id", pa.int32()),
+                pa.field("device_id", pa.int32()),
+                pa.field("event_data_type", pa.string()),
+                pa.field("event_type", pa.string()),
+                pa.field("image_data", pa.binary()),
+                pa.field("image_height", pa.int32()),
+                pa.field("image_width", pa.int32()),
+                pa.field("num_detections", pa.int32()),
+                pa.field("ts", pa.int32()),
+                pa.field("user_id", pa.int32()),
+            ]
+        )
 
     @staticmethod
     def tf_feature_spec(num_detections):
@@ -180,7 +198,7 @@ class NestedTelemetryEvent:
                 np.array([b.ymin, b.xmin, x.ymax, b.xmax])
                 for b in obj.eventData.boundingBoxes
             ]
-        
+
         image_data = obj.eventData.image.data.tobytes()
         return cls(
             ts=obj.metadata.ts,
@@ -206,38 +224,53 @@ class NestedTelemetryEvent:
 
     def asdict(self):
         return asdict(self)
-    
+
     def flatten(self):
-        array_fields = ["detection_scores", "detection_classes", "boxes_ymin", "boxes_xmin", "boxes_ymax", "boxes_xmax"]
-        default_fieldset = {k:v for k, v in self.asdict().items() if k not in array_fields }
-        return ( FlatTelemetryEvent(
-            **default_fieldset,
-            detection_class=self.detection_classes[i],
-            detection_score=self.detection_scores[i],
-            box_xmin=self.boxes_xmin[i],
-            box_ymin=self.boxes_ymin[i],
-            box_ymax=self.boxes_ymax[i],
-            box_xmax=self.boxes_xmax[i]
-            ) for i in range(0, self.num_detections)
+        array_fields = [
+            "detection_scores",
+            "detection_classes",
+            "boxes_ymin",
+            "boxes_xmin",
+            "boxes_ymax",
+            "boxes_xmax",
+        ]
+        default_fieldset = {
+            k: v for k, v in self.asdict().items() if k not in array_fields
+        }
+        return (
+            FlatTelemetryEvent(
+                **default_fieldset,
+                detection_class=self.detection_classes[i],
+                detection_score=self.detection_scores[i],
+                box_xmin=self.boxes_xmin[i],
+                box_ymin=self.boxes_ymin[i],
+                box_ymax=self.boxes_ymax[i],
+                box_xmax=self.boxes_xmax[i]
+            )
+            for i in range(0, self.num_detections)
         )
-    
+
     def drop_image_data(self):
         exclude = ["image_data", "image_tensor"]
         fieldset = self.asdict()
-        return self.__init__(**{k:v for k,v in fieldset.items() if k not in exclude})
-    
+        return self.__init__(**{k: v for k, v in fieldset.items() if k not in exclude})
+
     def min_score_filter(self, score_threshold=0.5):
-        masked_fields = ["detection_scores", "detection_classes", "boxes_ymin", "boxes_xmin", "boxes_ymax", "boxes_xmax"]
+        masked_fields = [
+            "detection_scores",
+            "detection_classes",
+            "boxes_ymin",
+            "boxes_xmin",
+            "boxes_ymax",
+            "boxes_xmax",
+        ]
         fieldset = instance.asdict()
         mask = event.detection_scores[event.detection_scores >= self.score_threshold]
 
-        default_fieldset = {k:v for k,v in fieldset.items() if k not in masked_fields}
-        masked_fields = {k: v[mask] for k,v in fieldset.items() if k in masked_fields}
-        return cls(
-            **default_fieldset,
-            **masked_fields
-        )
-    
+        default_fieldset = {k: v for k, v in fieldset.items() if k not in masked_fields}
+        masked_fields = {k: v[mask] for k, v in fieldset.items() if k in masked_fields}
+        return cls(**default_fieldset, **masked_fields)
+
     def percent_intersection(self, aoi_coords: typing.Tuple[float]):
         """
         Returns intersection-over-union area, normalized between 0 and 1
@@ -277,9 +310,11 @@ class NestedTelemetryEvent:
         return aou
 
     def detection_boxes(self):
-        return np.array([self.boxes_ymin, self.boxes_xmin, self.boxes_ymax, self.boxes_xmax ]).T
+        return np.array(
+            [self.boxes_ymin, self.boxes_xmin, self.boxes_ymax, self.boxes_xmax]
+        ).T
 
-    def calibration_filter(self, aoi_coords, min_overlap_area:float=0.75):
+    def calibration_filter(self, aoi_coords, min_overlap_area: float = 0.75):
 
         percent_intersection = self.percent_intersection(aoi_coords)
         ignored_mask = percent_intersection <= min_overlap_area
@@ -292,8 +327,18 @@ class NestedTelemetryEvent:
 
         num_detections = int(np.count_nonzero(included_mask))
 
-        filter_fields = ["detection_scores", "detection_classes", "boxes_ymin", "boxes_xmin", "boxes_ymax", "boxes_xmax", "num_detections"]
-        default_fieldset = {k:v for k,v in self.asdict().items() if k not in filter_fields}
+        filter_fields = [
+            "detection_scores",
+            "detection_classes",
+            "boxes_ymin",
+            "boxes_xmin",
+            "boxes_ymax",
+            "boxes_xmax",
+            "num_detections",
+        ]
+        default_fieldset = {
+            k: v for k, v in self.asdict().items() if k not in filter_fields
+        }
         boxes_ymin, boxes_xmin, boxes_ymax, boxes_xmax = detection_boxes.T
         return self.__class__(
             detection_scores=detection_scores,
