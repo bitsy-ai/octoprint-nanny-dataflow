@@ -176,11 +176,6 @@ class FilterDetections(beam.DoFn):
         self.calibration_filename = calibration_filename
         self.calibration_base_path = calibration_base_path
     
-    def filter_scores(self, event: NestedTelemetryEvent):
-        mask = event.detection_scores[event.detection_scores >= self.score_threshold]
-        return 
-
-    
     def process(self, row):
         session, event = row
 
@@ -194,12 +189,17 @@ class FilterDetections(beam.DoFn):
         )
         device_calibration_path = f'gcs://{device_calibration_path}'
 
+        event = event.min_score_filter(event, score_threshold=self.score_threshold)
+
         if gcs_client.exists(device_calibration_path):
             with gcs_client.open(device_calibration_path, 'r') as f:
                 logger.info(f"Loading device calibration from {device_calibration_path}")
                 calibration_json = json.load(f)
+            
+            coordinates = calibration_json["coordinates"]
+            event = NestedTelemetryEvent.calibration_filter(event, coordinates)
+
         else:
-            calibration_json = None
             logger.info("Area of interest calibration not set")
 
         return window, elements
@@ -298,7 +298,7 @@ def run_pipeline(args, pipeline_args):
             # https://www.oreilly.com/library/view/streaming-systems/9781491983867/ch04.html
             health_models_by_device_id = (
                 box_annotations
-                | "Drop image bytes/Tensor" >> beam.Map(lambda x: NestedTelemetryEvent.minimal(x))
+                | "Drop image bytes/Tensor" >> beam.Map(lambda x: x.drop_image_data())
                 # @todo implement area of interest filter
                 | "Add Session Window" >> beam.WindowInto(
                     window.Sessions(300),
@@ -343,13 +343,13 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--parquet-sink",
-        default="gs://print-nanny-sandbox/telemetry_event/parquet/date_session_user_id",
+        default="gs://print-nanny-sandbox/telemetry_event/parquet/session",
         help="Files will be output to this gcs bucket",
     )
 
     parser.add_argument(
-        "--annotated-frame-sink",
-        default="gs://print-nanny-sandbox/dataflow/telemetry_event/annotated_frame",
+        "--health-score-sink",
+        default="gs://print-nanny-sandbox/dataflow/telemetry_event/health",
         help="Files will be output to this gcs bucket",
     )
 
