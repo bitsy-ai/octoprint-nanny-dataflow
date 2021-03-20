@@ -4,6 +4,44 @@ import print_nanny_dataflow
 from print_nanny_dataflow.encoders.types import NestedTelemetryEvent
 
 
+def test_min_score_filter(partial_nested_telemetry_event_kwargs):
+    box = np.array([0.3, 0.3, 0.9, 0.9])
+    detection_boxes = np.stack((box for i in range(3)))
+    detection_scores = np.array([0.7, 0.1, 0.1])
+    detection_classes = np.array([1, 1, 1])
+
+    boxes_ymin, boxes_xmin, boxes_ymax, boxes_xmax = detection_boxes.T
+
+    event = NestedTelemetryEvent(
+        boxes_ymin=boxes_ymin,
+        boxes_xmin=boxes_xmin,
+        boxes_ymax=boxes_ymax,
+        boxes_xmax=boxes_xmax,
+        detection_classes=detection_classes,
+        detection_scores=detection_scores,
+        **partial_nested_telemetry_event_kwargs,
+    )
+
+    filtered_event = event.min_score_filter()
+
+    expected_detection_boxes = np.array([box]).T
+    (
+        expected_boxes_ymin,
+        expected_boxes_xmin,
+        expected_boxes_ymax,
+        expected_boxes_xmax,
+    ) = detection_boxes.T
+    expected_scores = np.array([0.7])
+    expected_classes = np.array([1])
+    assert filtered_event.num_detections == 1
+    assert all(filtered_event.boxes_ymin == expected_boxes_ymin)
+    assert all(filtered_event.boxes_ymax == expected_boxes_ymax)
+    assert all(filtered_event.boxes_xmin == expected_boxes_xmin)
+    assert all(filtered_event.boxes_xmax == expected_boxes_xmax)
+    assert all(filtered_event.detection_scores == expected_scores)
+    assert all(filtered_event.detection_classes == expected_classes)
+
+
 def test_area_of_intersection_overlap(partial_nested_telemetry_event_kwargs):
 
     detection_boxes = np.array([[0.3, 0.3, 0.9, 0.9]])

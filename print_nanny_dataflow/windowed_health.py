@@ -28,7 +28,6 @@ from tensorflow_serving.apis import predict_pb2
 from encoders.tfrecord_example import ExampleProtoEncoder
 from encoders.types import NestedTelemetryEvent, FlatTelemetryEvent
 from clients.rest import RestAPIClient
-from beam_nuggets.io import relational_db
 import pyarrow as pa
 
 logger = logging.getLogger(__name__)
@@ -61,6 +60,10 @@ class WriteBatchedTFRecords(beam.DoFn):
         self.schema = schema
 
     def process(self, element):
+        import pdb
+
+        pdb.set_trace()
+
         key, elements = element
         coder = ExampleProtoEncoder(self.schema)
         ts = int(datetime.now().timestamp())
@@ -182,18 +185,17 @@ class FilterDetections(beam.DoFn):
         self.calibration_filename = calibration_filename
         self.calibration_base_path = calibration_base_path
 
-    def process(self, row):
+    def process(self, row: Tuple[bytes, NestedTelemetryEvent]):
         session, event = row
-
         gcs_client = beam.io.gcp.gcsio.GcsIO()
 
-        device_id = elements[0].device_id
+        device_id = event.device_id
         device_calibration_path = os.path.join(
-            self.calibration_base_path, device_id, self.calibration_filename
+            self.calibration_base_path, str(device_id), self.calibration_filename
         )
         device_calibration_path = f"gcs://{device_calibration_path}"
 
-        event = event.min_score_filter(event, score_threshold=self.score_threshold)
+        event = event.min_score_filter(score_threshold=self.score_threshold)
 
         if gcs_client.exists(device_calibration_path):
             with gcs_client.open(device_calibration_path, "r") as f:
@@ -208,7 +210,7 @@ class FilterDetections(beam.DoFn):
         else:
             logger.info("Area of interest calibration not set")
 
-        return window, elements
+        return session, event
 
 
 class WriteBatchedParquet(beam.DoFn):
@@ -217,11 +219,10 @@ class WriteBatchedParquet(beam.DoFn):
         self.batch_size = batch_size
         self.schema = schema
 
-    def process(self, batched_elements: List[Tuple[str, NestedTelemetryEvent]]):
-
+    def process(self, batched_elements):
         session, elements = batched_elements
         output_path = os.path.join(
-            self.parquet_base_path, session, int(datetime.now().timestamp())
+            self.parquet_base_path, session, str(int(datetime.now().timestamp()))
         )
 
         yield (elements | beam.io.parquetio.WriteToParquet(output_path, self.schema))
@@ -277,12 +278,14 @@ def run_pipeline(args, pipeline_args):
                 | "Key by session id" >> beam.Map(lambda x: (x.session, x))
             )
 
-            tfrecord_sink_pipeline = (
+            batched_records = (
                 box_annotations
-                | "Batch TFRecords"
-                >> beam.transforms.util.BatchElements(
-                    min_batch_size=args.batch_size, max_batch_size=args.batch_size
-                )
+                | f"Create batches size: {args.batch_size}"
+                >> beam.GroupIntoBatches(args.batch_size)
+            )
+
+            tfrecord_sink_pipeline = (
+                batched_records
                 | "Write TFRecords"
                 >> beam.ParDo(
                     WriteBatchedTFRecords(args.tfrecord_sink, metadata.schema)
@@ -290,19 +293,11 @@ def run_pipeline(args, pipeline_args):
                 | "Print TFRecord paths" >> beam.Map(print)
             )
 
-            parquet_sink_pipeline = (
-                box_annotations
-                | "Batch Parquet"
-                >> beam.transforms.util.BatchElements(
-                    min_batch_size=args.batch_size, max_batch_size=args.batch_size
-                )
-                | "Write Parquet"
-                >> beam.ParDo(
-                    WriteBatchedParquet(
-                        args.parquet_sink,
-                        schema=NestedTelemetryEvent.pyarrow_schema(args.num_detections),
-                        batch_size=args.batch_size,
-                    )
+            parquet_sink_pipeline = batched_records | "Write Parquet" >> beam.ParDo(
+                WriteBatchedParquet(
+                    args.parquet_sink,
+                    schema=NestedTelemetryEvent.pyarrow_schema(args.num_detections),
+                    batch_size=args.batch_size,
                 )
             )
 
@@ -314,22 +309,22 @@ def run_pipeline(args, pipeline_args):
             # https://www.oreilly.com/library/view/streaming-systems/9781491983867/ch04.html
             health_models_by_device_id = (
                 box_annotations
-                | "Drop image bytes/Tensor" >> beam.Map(lambda x: x.drop_image_data())
-                # @todo implement area of interest filter
-                | "Add Session Window"
-                >> beam.WindowInto(
-                    window.Sessions(300),
-                    beam.transforms.trigger.Repeatedly(
-                        beam.transforms.trigger.AfterCount(3)
-                    ),
-                    accumulation_mode=beam.transforms.trigger.AccumulationMode.DISCARDING,
-                )
-                | "Group by key" >> beam.GroupByKey()
+                | "Drop image bytes/Tensor"
+                >> beam.Map(lambda x: (x[0], x[1].drop_image_data()))
                 | "Drop detections outside of calibration area of interest"
                 >> beam.ParDo(
                     FilterDetections(args.calibration_base_path, score_threshold=0.5)
                 )
-                # | "Calculate health score trend" >>  beam.ParDo(CalcHealthScoreTrend(score_threshold=0.5, health_threshold=3))
+                # @todo implement area of interest filter
+                | "Add Session Window"
+                >> beam.WindowInto(
+                    beam.transforms.window.SlidingWindows(
+                        args.sliding_window_size, args.sliding_window_period
+                    )
+                )
+                | "Group by key" >> beam.GroupByKey()
+                | "Calculate health score trend"
+                >> beam.ParDo(CalcHealthScoreTrend(health_threshold=3))
             )
 
 
@@ -347,6 +342,10 @@ if __name__ == "__main__":
         default="monitoring-frame-raw",
         help="PubSub topic",
     )
+
+    parser.add_argument("--sliding-window-size", default=600)  # 10 minutes
+
+    parser.add_argument("--sliding-window-period", default=5)  # 30 seconds
 
     parser.add_argument(
         "--bucket",
@@ -417,7 +416,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--batch-size",
-        default=24,
+        default=3,
     )
 
     parser.add_argument("--postgres-host", default="localhost", help="Postgres host")
@@ -435,40 +434,3 @@ if __name__ == "__main__":
     args, pipeline_args = parser.parse_known_args()
 
     run_pipeline(args, pipeline_args)
-
-    # @todo join device calibration
-    # source_config = relational_db.SourceConfiguration(
-    #     drivername='postgresql+psycopg2',
-    #     host=args.postgres_host=,
-    #     port=args.postgres_port,
-    #     username=args.postgres_user,
-    #     password=args.postgres_pass,
-    #     database=args.postgres_db,
-    #     create_if_missing=False,
-    # )
-    # table_config = relational_db.TableConfiguration(
-    #     name='client_events_monitoringframeevent',
-    #     create_if_missing=False
-    # )
-
-    # image_sink_pipeline = (
-    #     prediction_pipeline
-    #     | "Write image bytes to gcs" >>
-    # )
-
-    # postgres_sink_pipeline = (
-    #     prediction_pipeline
-    #     | "Reserialize as dict" >> beam.Map(lambda e: print_nanny_client.MonitoringFrameEvent(
-    #         device=e.device_id,
-    #         user=e.user_id,
-    #         ts=e.ts,
-    #         session=e.session,
-
-    #     )
-
-    #     )
-    #     | "Save to Postgres" >> relational_db.Write(
-    #         source_config=source_config,
-    #         table_config=table_config
-    #     )
-    # )

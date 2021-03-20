@@ -202,7 +202,7 @@ class NestedTelemetryEvent:
         image_data = obj.eventData.image.data.tobytes()
         return cls(
             ts=obj.metadata.ts,
-            session=obj.metadata.session,
+            session=obj.metadata.session.decode("utf-8"),
             client_version=obj.metadata.clientVersion,
             event_type=obj.eventType,
             event_data_type=obj.eventDataType,
@@ -253,7 +253,7 @@ class NestedTelemetryEvent:
     def drop_image_data(self):
         exclude = ["image_data", "image_tensor"]
         fieldset = self.asdict()
-        return self.__init__(**{k: v for k, v in fieldset.items() if k not in exclude})
+        return self.__class__(**{k: v for k, v in fieldset.items() if k not in exclude})
 
     def min_score_filter(self, score_threshold=0.5):
         masked_fields = [
@@ -264,12 +264,28 @@ class NestedTelemetryEvent:
             "boxes_ymax",
             "boxes_xmax",
         ]
-        fieldset = instance.asdict()
-        mask = event.detection_scores[event.detection_scores >= self.score_threshold]
+        ignored_fields = ["num_detections"]
+        fieldset = self.asdict()
+        mask = self.detection_scores >= score_threshold
 
-        default_fieldset = {k: v for k, v in fieldset.items() if k not in masked_fields}
-        masked_fields = {k: v[mask] for k, v in fieldset.items() if k in masked_fields}
-        return cls(**default_fieldset, **masked_fields)
+        default_fieldset = {
+            k: v
+            for k, v in fieldset.items()
+            if k not in masked_fields and k not in ignored_fields
+        }
+        if np.count_nonzero(mask) == 0:
+            masked_fields = {
+                k: np.array() for k, v in fieldset.items() if k in masked_fields
+            }
+        else:
+            masked_fields = {
+                k: v[mask]
+                for k, v in fieldset.items()
+                if k in masked_fields and k not in ignored_fields
+            }
+        return self.__class__(
+            **default_fieldset, **masked_fields, num_detections=np.count_nonzero(mask)
+        )
 
     def percent_intersection(self, aoi_coords: typing.Tuple[float]):
         """
