@@ -39,3 +39,8 @@ dataflow-prod:
 	--loglevel INFO
 
 
+lint:
+	$(PYTHON) -m black setup.py print_nanny_dataflow conftest.py tests
+
+install-git-hooks:
+	cp -a hooks/. .git/hooks/
