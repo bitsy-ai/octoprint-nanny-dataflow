@@ -5,6 +5,7 @@ import tensorflow as tf
 from tensorflow_transform.tf_metadata import schema_utils
 from tensorflow_transform.tf_metadata import dataset_metadata
 
+import pyarrow as pa
 from print_nanny_client.telemetry_event import TelemetryEvent
 
 from dataclasses import dataclass, asdict
@@ -43,7 +44,7 @@ class MonitoringFrame:
 class FlatTelemetryEvent:
     """
     flattened data structures for
-    tensorflow_transform.tf_metadata.schema_utils.schema_from_feature_spec
+    tensorflow_transform.tf_metadata.schema_utils.schema_from_tf_feature_spec
     """
 
     ts: int
@@ -76,7 +77,7 @@ class FlatTelemetryEvent:
 class NestedTelemetryEvent:
     """
     flattened data structures for
-    tensorflow_transform.tf_metadata.schema_utils.schema_from_feature_spec
+    tensorflow_transform.tf_metadata.schema_utils.schema_from_tf_feature_spec
     """
 
     ts: int
@@ -106,7 +107,30 @@ class NestedTelemetryEvent:
     image_tensor: tf.Tensor = None
 
     @staticmethod
-    def feature_spec(num_detections):
+    def pyarrow_schema(num_detections):
+       return pa.schema([
+            pa.field("ts", pa.int32()),
+            pa.field("client_version", pa.string()),
+            pa.field("event_type", pa.string()),
+            pa.field("event_data_type", pa.string()),
+            pa.field("user_id", pa.int32()),
+            pa.field("device_id", pa.int32()),
+            pa.field("device_cloudiot_id", pa.int32()),
+            pa.field("detection_scores", pa.list_(pa.float32(), list_size=num_detections)),
+            pa.field("detection_classes", pa.list_(pa.int32(), list_size=num_detections)),
+            pa.field("num_detections", pa.int32()),
+            pa.field("boxes_ymin", pa.list_(pa.float32(), list_size=num_detections)),
+            pa.field("boxes_xmin", pa.list_(pa.float32(), list_size=num_detections)),
+            pa.field("boxes_ymax", pa.list_(pa.float32(), list_size=num_detections)),
+            pa.field("boxes_xmax", pa.list_(pa.float32(), list_size=num_detections)),
+            pa.field("image_width", pa.int32()),
+            pa.field("image_height", pa.int32()),
+            pa.field("image_data", pa.binary())
+
+       ])
+
+    @staticmethod
+    def tf_feature_spec(num_detections):
         return schema_utils.schema_from_feature_spec(
             {
                 "ts": tf.io.FixedLenFeature([], tf.float32),
@@ -131,8 +155,8 @@ class NestedTelemetryEvent:
         )
 
     @staticmethod
-    def tfrecord_metadata(feature_spec):
-        return dataset_metadata.DatasetMetadata(feature_spec)
+    def tfrecord_metadata(tf_feature_spec):
+        return dataset_metadata.DatasetMetadata(tf_feature_spec)
 
     @classmethod
     def from_flatbuffer(cls, input_bytes):
@@ -202,3 +226,16 @@ class NestedTelemetryEvent:
         exclude = ["image_data", "image_tensor"]
         fieldset = instance.asdict()
         return cls(**{k:v for k,v in fieldset.items() if k not in exclude})
+    
+    @classmethod
+    def filter_detection_scores(cls, instance, score_threshold=0.5):
+        masked_fields = ["detection_scores", "detection_classes", "boxes_ymin", "boxes_xmin", "boxes_ymax", "boxes_xmax"]
+        fieldset = instance.asdict()
+        mask = event.detection_scores[event.detection_scores >= self.score_threshold]
+
+        default_fieldset = {k:v for k,v in fieldset.items() if k not in masked_fields}
+        masked_fields = {k: v[mask] for k,v in fieldset.items() if k in masked_fields}
+        return cls(
+            **default_fieldset,
+            **masked_fields
+        )

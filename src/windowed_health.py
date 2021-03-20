@@ -29,6 +29,7 @@ from encoders.tfrecord_example import ExampleProtoEncoder
 from encoders.types import NestedTelemetryEvent, FlatTelemetryEvent
 from clients.rest import RestAPIClient
 from beam_nuggets.io import relational_db
+import pyarrow as pa
 
 logger = logging.getLogger(__name__)
 
@@ -52,25 +53,18 @@ POSITIVE_LABELS = {
 
 }
 
-
-class AddWindowingInfoFn(beam.DoFn):
-    """output tuple of window(key) + element(value)"""
-
-    def process(self, element, window=beam.DoFn.WindowParam):
-        yield (window, element)
-
-
-class WriteWindowedTFRecords(beam.DoFn):
+class WriteBatchedTFRecords(beam.DoFn):
     """write one file per window/key"""
 
     def __init__(self, outdir, schema):
         self.outdir = outdir
         self.schema = schema
 
-    def process(self, elements):
+    def process(self, element):
+        key, elements = element
         coder = ExampleProtoEncoder(self.schema)
-        ts = datetime.now().timestamp()
-        output =   os.path.join(self.outdir, str(ts))
+        ts = int(datetime.now().timestamp())
+        output =   os.path.join(self.outdir, key, str(ts))
         logger.info(f"Writing {output} with coder {coder}")
         yield (
             elements
@@ -104,24 +98,26 @@ async def download_active_experiment_model(tmp_dir='.tmp/', model_artifact_id=1)
     logger.info(f"Finished extracting {tmp_artifacts_tarball}")
 
 
-class CalcHealthScoreStateful(beam.DoFn):
+class CalcHealthScoreTrend(beam.DoFn):
 
     STALE_TIMER = beam.transforms.userstate.TimerSpec('stale', beam.TimeDomain.REAL_TIME)
 
     # HEALTH_TREND = beam.transforms.userstate.CombiningValueStateSpec('health_score_acc', beam.coders.coders.Coder(), combine_fn=HealthScoreCombineFn)
-    UNHEALTHY_COUNT_ACC = beam.transforms.userstate.CombiningValueStateSpec('unhealthy_count_acc', beam.coders.coders.Coder(), combine_fn=sum)
+    UNHEALTHY_COUNT_ACC = beam.transforms.userstate.CombiningValueStateSpec('unhealthy_count_acc', combine_fn=sum)
 
-    def __init__(self, threshold=3):
-        self.threshold = threshold
+    def __init__(self, score_threshold=0.5, health_threshold=3, ):
+        self.score_threshold = score_threshold
+        self.health_threshold = health_threshold
 
     def process(self, 
-        elements 
+        elements,
+        unhealthy_count_acc = beam.DoFn.StateParam(UNHEALTHY_COUNT_ACC)
     ):
         session, telemetry_events = elements
         logger.info(session)
-
+        unhealthy_count_acc.add(1)
         import pdb; pdb.set_trace()
-        logger.info(telemetry_events)
+        yield session, telemetry_events
 
         
 
@@ -174,6 +170,149 @@ class PredictBoundingBoxes(beam.DoFn):
         )]
 
 
+class FilterDetections(beam.DoFn):
+    def __init__(self, calibration_base_path: str, score_threshold: float = 0.5, calibration_filename: str = 'calibration.json'):
+        self.score_threshold = 0.5
+        self.calibration_filename = calibration_filename
+        self.calibration_base_path = calibration_base_path
+    
+    def filter_scores(self, event: NestedTelemetryEvent):
+        mask = event.detection_scores[event.detection_scores >= self.score_threshold]
+        return 
+
+    
+    def process(self, row):
+        session, event = row
+
+        gcs_client = beam.io.gcp.gcsio.GcsIO()
+
+        device_id = elements[0].device_id
+        device_calibration_path = os.path.join(
+            self.calibration_base_path,
+            device_id,
+            self.calibration_filename
+        )
+        device_calibration_path = f'gcs://{device_calibration_path}'
+
+        if gcs_client.exists(device_calibration_path):
+            with gcs_client.open(device_calibration_path, 'r') as f:
+                logger.info(f"Loading device calibration from {device_calibration_path}")
+                calibration_json = json.load(f)
+        else:
+            calibration_json = None
+            logger.info("Area of interest calibration not set")
+
+        return window, elements
+
+class WriteBatchedParquet(beam.DoFn):
+
+    def __init__(self, parquet_base_path: str, schema: pa.Schema, batch_size: int):
+        self.parquet_base_path = parquet_base_path
+        self.batch_size = batch_size
+        self.schema = schema
+    
+    def process(self, batched_elements: List[Tuple[str, NestedTelemetryEvent]]):
+
+        session, elements = batched_elements
+        output_path = os.path.join(
+            self.parquet_base_path,
+            session,
+            int(datetime.now().timestamp())
+        )
+
+        yield (
+            elements
+            | beam.io.parquetio.WriteToParquet(
+                output_path,
+                self.schema
+            )
+        )
+
+
+def run_pipeline(args, pipeline_args):
+    topic_path = os.path.join("projects", args.project, "topics", args.topic)
+    logging.basicConfig(level=getattr(logging, args.loglevel))
+
+    beam_options = PipelineOptions(
+        pipeline_args, save_main_session=True, streaming=True, runner=args.runner
+    )
+
+    # download model tarball
+    if args.runner == "DataflowRunner":
+        asyncio.run(download_active_experiment_model())
+
+
+    # load input shape from model metadata
+    model_path = os.path.join(args.tmp_dir, args.model_version, 'model.tflite')
+    model_metadata_path = os.path.join(args.tmp_dir, args.model_version, 'tflite_metadata.json')
+    model_metadata = json.load(open(model_metadata_path, 'r'))
+    input_shape = model_metadata['inputShape']
+    # any batch size
+    input_shape[0] = None
+
+    tmp_sink = os.path.join(args.tfrecord_sink, "tmp")
+
+    with beam.Pipeline(options=beam_options) as p:
+        with beam_impl.Context(tmp_sink):
+            parsed_dataset = (
+                p
+                | "Read TelemetryEvent"
+                >> beam.io.ReadFromPubSub(
+                    topic=topic_path,
+                )
+                | "Deserialize Flatbuffer"
+                >> beam.Map(NestedTelemetryEvent.from_flatbuffer).with_output_types(
+                    NestedTelemetryEvent
+                )
+                | "With timestamps"
+                >> beam.Map(lambda x: beam.window.TimestampedValue(x, x.ts))
+            )
+
+            tf_feature_spec = NestedTelemetryEvent.tf_feature_spec(args.num_detections)
+            metadata = NestedTelemetryEvent.tfrecord_metadata(tf_feature_spec)
+
+            box_annotations = (
+                parsed_dataset
+                | "Add Bounding Box Annotations" >>  beam.ParDo(PredictBoundingBoxes(model_path))
+                | "Key by session id" >> beam.Map(lambda x: (x.session, x))
+            )
+
+            tfrecord_sink_pipeline = (
+                box_annotations
+                | "Batch TFRecords" >> beam.transforms.util.BatchElements(min_batch_size=args.batch_size, max_batch_size=args.batch_size)
+                | "Write TFRecords" >> beam.ParDo(WriteBatchedTFRecords(args.tfrecord_sink, metadata.schema))
+                | "Print TFRecord paths" >> beam.Map(print)
+            )
+
+            parquet_sink_pipeline = (
+                box_annotations
+                | "Batch Parquet" >> beam.transforms.util.BatchElements(min_batch_size=args.batch_size, max_batch_size=args.batch_size)
+                | "Write Parquet" >> beam.ParDo(WriteBatchedParquet(args.parquet_sink, schema=NestedTelemetryEvent.pyarrow_schema(args.num_detections), batch_size=args.batch_size))
+            )
+
+            # @ todo sink annotated frames to GCS for video reconstruction
+            # annotated_image_sink_pipeline = ()
+            
+            # @todo implement BoundedSession
+            # probably easier to port everything to Java before attempting this
+            # https://www.oreilly.com/library/view/streaming-systems/9781491983867/ch04.html
+            health_models_by_device_id = (
+                box_annotations
+                | "Drop image bytes/Tensor" >> beam.Map(lambda x: NestedTelemetryEvent.minimal(x))
+                # @todo implement area of interest filter
+                | "Add Session Window" >> beam.WindowInto(
+                    window.Sessions(300),
+                    beam.transforms.trigger.Repeatedly(beam.transforms.trigger.AfterCount(3)),
+                    accumulation_mode=beam.transforms.trigger.AccumulationMode.DISCARDING)
+                | "Group by key" >> beam.GroupByKey()
+                | "Drop detections outside of calibration area of interest" >>  beam.ParDo(FilterDetections(
+                    args.calibration_base_path,
+                    score_threshold=0.5
+                    ))
+
+                # | "Calculate health score trend" >>  beam.ParDo(CalcHealthScoreTrend(score_threshold=0.5, health_threshold=3))
+            )
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -197,8 +336,26 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--sink",
-        default="gs://print-nanny-sandbox/dataflow/tfrecords/windowed",
+        "--tfrecord-sink",
+        default="gs://print-nanny-sandbox/dataflow/telemetry_event/tfrecords/batched",
+        help="Files will be output to this gcs bucket",
+    )
+
+    parser.add_argument(
+        "--parquet-sink",
+        default="gs://print-nanny-sandbox/telemetry_event/parquet/date_session_user_id",
+        help="Files will be output to this gcs bucket",
+    )
+
+    parser.add_argument(
+        "--annotated-frame-sink",
+        default="gs://print-nanny-sandbox/dataflow/telemetry_event/annotated_frame",
+        help="Files will be output to this gcs bucket",
+    )
+
+    parser.add_argument(
+        "--calibration-base-path",
+        default="gs://print-nanny-sandbox/uploads/device_calibration",
         help="Files will be output to this gcs bucket",
     )
 
@@ -285,76 +442,7 @@ if __name__ == "__main__":
 
     args, pipeline_args = parser.parse_known_args()
 
-    topic_path = os.path.join("projects", args.project, "topics", args.topic)
-    logging.basicConfig(level=getattr(logging, args.loglevel))
-
-    beam_options = PipelineOptions(
-        pipeline_args, save_main_session=True, streaming=True, runner=args.runner
-    )
-
-    # download model tarball
-    if args.runner == "DataflowRunner":
-        asyncio.run(download_active_experiment_model())
-
-
-    # load input shape from model metadata
-    model_path = os.path.join(args.tmp_dir, args.model_version, 'model.tflite')
-    model_metadata_path = os.path.join(args.tmp_dir, args.model_version, 'tflite_metadata.json')
-    model_metadata = json.load(open(model_metadata_path, 'r'))
-    input_shape = model_metadata['inputShape']
-    # any batch size
-    input_shape[0] = None
-
-    tmp_sink = os.path.join(args.sink, "tmp")
-
-    with beam.Pipeline(options=beam_options) as p:
-        with beam_impl.Context(tmp_sink):
-            parsed_dataset = (
-                p
-                | "Read TelemetryEvent"
-                >> beam.io.ReadFromPubSub(
-                    topic=topic_path,
-                )
-                | "Deserialize Flatbuffer"
-                >> beam.Map(NestedTelemetryEvent.from_flatbuffer).with_output_types(
-                    NestedTelemetryEvent
-                )
-                | "With timestamps"
-                >> beam.Map(lambda x: beam.window.TimestampedValue(x, x.ts))
-
-            )
-
-            feature_spec = NestedTelemetryEvent.feature_spec(args.num_detections)
-            metadata = NestedTelemetryEvent.tfrecord_metadata(feature_spec)
-
-            box_annotations = (
-                parsed_dataset
-                | "Add Bounding Box Annotations" >>  beam.ParDo(PredictBoundingBoxes(model_path))
-            )
-
-            tfrecord_sink_pipeline = (
-                box_annotations
-                | "Batch TFRecords" >> beam.transforms.util.BatchElements(min_batch_size=args.batch_size, max_batch_size=args.batch_size)
-                | "Write TFRecords" >> beam.ParDo(WriteWindowedTFRecords(args.sink, metadata.schema))
-                | "Print TFRecord paths" >> beam.Map(print)
-            )
-            
-            # @todo implement BoundedSession
-            # probably easier to port everything to Java before attempting this
-            # https://www.oreilly.com/library/view/streaming-systems/9781491983867/ch04.html
-            health_models_by_device_id = (
-                box_annotations
-                | "Drop image bytes/Tensor" >> beam.Map(lambda x: NestedTelemetryEvent.minimal(x))
-                # @todo implement area of interest filter
-                # | "Drop frames outside of calibration area of interest" >>
-                | "Key by session id" >> beam.Map(lambda x: (x.session, x))
-                | "Add Session Window" >> beam.WindowInto(
-                    window.Sessions(300),
-                    beam.transforms.trigger.Repeatedly(beam.transforms.trigger.AfterCount(3)),
-                    accumulation_mode=beam.transforms.trigger.AccumulationMode.ACCUMULATING)
-                | "Group by key" >> beam.GroupByKey()
-                | "Calculate health score trend" >>  beam.ParDo(CalcHealthScoreTrend())
-            )
+    run_pipeline(args, pipeline_args)
 
             # @todo join device calibration
             # source_config = relational_db.SourceConfiguration(
