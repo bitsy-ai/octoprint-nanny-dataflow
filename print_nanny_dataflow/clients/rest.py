@@ -51,3 +51,20 @@ class RestAPIClient:
             )
             artifacts = await api_instance.model_artifacts_retrieve(model_artifact_id)
             return artifacts
+
+    @backoff.on_exception(
+        backoff.expo,
+        aiohttp.ClientConnectionError,
+        logger=logger,
+        max_time=MAX_BACKOFF_TIME,
+        jitter=backoff.random_jitter,
+    )
+    async def create_defect_alert(self, octoprint_device_id, **kwargs):
+        async with AsyncApiClient(self._api_config) as api_client:
+            api_instance = print_nanny_client.AlertsApi(api_client=api_client)
+
+            request = print_nanny_client.DefectAlertRequest(
+                octoprint_device=octoprint_device_id, **kwargs
+            )
+            defect_alert = await api_instance.defect_alerts_create(request)
+            return defect_alert

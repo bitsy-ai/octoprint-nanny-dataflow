@@ -50,6 +50,7 @@ POSITIVE_LABELS = {
     4: "print",
 }
 
+
 class WriteBatchedTFRecords(beam.DoFn):
     """write one file per window/key"""
 
@@ -88,7 +89,11 @@ class WriteBatchedParquet(beam.DoFn):
             self.parquet_base_path, session, str(int(datetime.now().timestamp()))
         )
 
-        yield (e.asdict() for e in elements | beam.io.parquetio.WriteToParquet(output_path, self.schema))
+        yield (
+            e.asdict()
+            for e in elements
+            | beam.io.parquetio.WriteToParquet(output_path, self.schema)
+        )
 
 
 def write_batched_parquet(batched_elements, parquet_base_path, schema):
@@ -99,6 +104,7 @@ def write_batched_parquet(batched_elements, parquet_base_path, schema):
 
     elements = beam.Create([e.asdict() for e in elements])
     return elements | beam.io.parquetio.WriteToParquet(output_path, schema)
+
 
 async def download_active_experiment_model(tmp_dir=".tmp/", model_artifact_id=1):
 
@@ -120,21 +126,23 @@ async def download_active_experiment_model(tmp_dir=".tmp/", model_artifact_id=1)
 
 
 class CalcHealthScoreTrend(beam.DoFn):
-
     def __init__(
         self,
         checkpoint_sink,
         window_size,
+        api_url,
+        api_token,
         health_threshold=3,
-        polyfit_degree=1
+        polyfit_degree=1,
     ):
         self.health_threshold = health_threshold
         self.checkpoint_sink = checkpoint_sink
-        self.polyfit_degree = polyfit_degree 
+        self.polyfit_degree = polyfit_degree
         self.window_size = window_size
-    
 
-    def trailing_window_trends(self, session: str, window: beam.DoFn.WindowParam) -> bool:
+    def trailing_window_trends(
+        self, session: str, window: beam.DoFn.WindowParam
+    ) -> bool:
         gcs_client = beam.io.gcp.gcsio.GcsIO()
 
         # if health trending download, look back at past n observations and alert if health_threshold is exceeded
@@ -143,35 +151,63 @@ class CalcHealthScoreTrend(beam.DoFn):
 
             window_start = window.start - (n * self.window_size)
             window_end = window.end - (n * self.window_size)
-            read_csv_path = os.path.join(self.checkpoint_sink, session, f'{window_start}_{window_end}', 'trend.csv')
+            read_csv_path = os.path.join(
+                self.checkpoint_sink,
+                session,
+                f"{window_start}_{window_end}",
+                "trend.csv",
+            )
 
             if gcs_client.exists(read_csv_path):
                 past_trend_df = pd.read_csv(past_trend_df)
                 past_trend_dfs.append(past_trend_df)
-        
+
         return pd.concat(past_trend_dfs)
-    
-    def should_alert(self, trailing_trend_df: pd.DataFrame, current_trend_df: pd.DataFrame) -> bool:
+
+    def should_alert(
+        self, trailing_trend_df: pd.DataFrame, current_trend_df: pd.DataFrame
+    ) -> bool:
         df = trailing_trend_df.concat(current_trend_df)
-        return len(df['slope'] < 0) >= self.health_threshold
-    
-    def send_alert(self, session):
-        pass
+        return len(df["slope"] < 0) >= self.health_threshold
+
+    async def send_alert_async(
+        self, session: str, telemetry_event: NestedTelemetryEvent
+    ):
+        rest_client = RestAPIClient(api_token=self.api_token, api_url=self.api_url)
+
+        res = await rest_client.create_defect_alert(
+            telemetry_event.device_id,
+            user=telemetry_event.user_id,
+            print_session=session,
+        )
+
+        logger.info(f"create_defect_alert res={res}")
 
     def process(
-        self, keyed_elements: Tuple[Any, Iterable[NestedTelemetryEvent]], window=beam.DoFn.WindowParam
+        self,
+        keyed_elements: Tuple[Any, Iterable[NestedTelemetryEvent]],
+        window=beam.DoFn.WindowParam,
     ):
         session, telemetry_events = keyed_elements
 
-        logger.info(f"CalcHealthScoreTrend window_start={window.start} window_end={window.end} num events={len(telemetry_events)} ts range={telemetry_events[0].ts},{telemetry_events[-1].ts}")
+        logger.info(
+            f"CalcHealthScoreTrend window_start={window.start} window_end={window.end} num events={len(telemetry_events)} ts range={telemetry_events[0].ts},{telemetry_events[-1].ts}"
+        )
 
+        exploded_output_path = os.path.join(
+            self.checkpoint_sink,
+            session,
+            f"{window.start}_{window.end}",
+            "exploded.parquet",
+        )
+        trend_output_path = os.path.join(
+            self.checkpoint_sink, session, f"{window.start}_{window.end}", "trend.csv"
+        )
 
-        exploded_output_path = os.path.join(self.checkpoint_sink, session, f'{window.start}_{window.end}', 'exploded.parquet')
-        trend_output_path = os.path.join(self.checkpoint_sink, session, f'{window.start}_{window.end}', 'trend.csv')
-
-
-        df = pd.concat([e.explode_detections() for e in telemetry_events]).sort_values('ts')
-        df.to_parquet(exploded_output_path, engine='pyarrow')
+        df = pd.concat([e.explode_detections() for e in telemetry_events]).sort_values(
+            "ts"
+        )
+        df.to_parquet(exploded_output_path, engine="pyarrow")
         df = pd.concat(
             {
                 "unhealthy": df[df["detection_classes"].isin(NEGATIVE_LABELS)],
@@ -193,15 +229,19 @@ class CalcHealthScoreTrend(beam.DoFn):
 
         slope, intercept = tuple(trend)
 
-        current_trend_df = pd.DataFrame(tuple(scope, intercept, window.start, window.end), columns=["slope", "intercept", "window_start", "window_end"])
+        current_trend_df = pd.DataFrame(
+            tuple(scope, intercept, window.start, window.end),
+            columns=["slope", "intercept", "window_start", "window_end"],
+        )
         current_trend_df.write_csv(trend_output_path)
 
         # if health trending download, look back at past n observations and alert if health_threshold is exceeded
         if slope < 0:
             trailing_trend_df = self.trailing_window_trends(session, window)
             if self.should_alert(trailing_trend_df, current_trend_df):
-                self.send_alert(session)
-        
+                res = asyncio.get_event_loop().run_until_complete(send_alert_async())
+
+        res = asyncio.get_event_loop().run_until_complete(send_alert_async())
 
 
 def predict_bounding_boxes(element, model_path):
@@ -238,6 +278,7 @@ def predict_bounding_boxes(element, model_path):
     defaults.update(params)
     return NestedTelemetryEvent(**defaults)
 
+
 class FilterDetections(beam.DoFn):
     def __init__(
         self,
@@ -249,8 +290,10 @@ class FilterDetections(beam.DoFn):
         self.calibration_base_path = calibration_base_path
         self.score_threshold = score_threshold
         self.calibration_filename = calibration_filename
-    
-    def process(self, keyed_row: Tuple[Any, NestedTelemetryEvent]) -> Tuple[Any, NestedTelemetryEvent]:
+
+    def process(
+        self, keyed_row: Tuple[Any, NestedTelemetryEvent]
+    ) -> Tuple[Any, NestedTelemetryEvent]:
         session, event = keyed_row
         gcs_client = beam.io.gcp.gcsio.GcsIO()
 
@@ -270,7 +313,7 @@ class FilterDetections(beam.DoFn):
 
             coordinates = calibration_json["coordinates"]
             event = NestedTelemetryEvent.calibration_filter(event, coordinates)
-        yield   (session, event)
+        yield (session, event)
 
 
 def run_pipeline(args, pipeline_args):
@@ -341,7 +384,7 @@ def run_pipeline(args, pipeline_args):
             # )
 
             # parquet_sink_pipeline = (
-            #     batched_records 
+            #     batched_records
             #     | "Write Parquet" >> beam.Map(lambda x:
             #     write_batched_parquet(
             #         x,
@@ -373,9 +416,16 @@ def run_pipeline(args, pipeline_args):
                     )
                 )
                 | "Group by key" >> beam.GroupByKey()
-
                 | "Calculate health score trend"
-                >> beam.ParDo(CalcHealthScoreTrend(args.health_checkpoint_sink, args.health_window_size, health_threshold=3))
+                >> beam.ParDo(
+                    CalcHealthScoreTrend(
+                        args.health_checkpoint_sink,
+                        args.health_window_size,
+                        args.api_url,
+                        args.api_token,
+                        health_threshold=3,
+                    )
+                )
             )
 
 

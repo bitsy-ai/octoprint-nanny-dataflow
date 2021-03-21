@@ -30,6 +30,7 @@ POSITIVE_LABELS = {
     4: "print",
 }
 
+
 @dataclass
 class Image:
     height: int
@@ -242,10 +243,18 @@ class NestedTelemetryEvent:
         )
 
     def to_health_dataframe(self) -> pd.DataFrame:
-        data = { "ts": self.ts, "detection_classes": self.detection_classes, "detection_scores": self.detection_scores }
-        df = pd.DataFrame.from_records([data]).set_index("ts").apply(pd.Series.explode).reset_index()       
+        data = {
+            "ts": self.ts,
+            "detection_classes": self.detection_classes,
+            "detection_scores": self.detection_scores,
+        }
+        df = (
+            pd.DataFrame.from_records([data])
+            .set_index("ts")
+            .apply(pd.Series.explode)
+            .reset_index()
+        )
         return df.set_index(["ts", "detection_classes"])
-    
 
     def asdict(self):
         return asdict(self)
@@ -300,7 +309,9 @@ class NestedTelemetryEvent:
         }
         if np.count_nonzero(mask) == 0:
             masked_fields = {
-                k: np.array([]) for k, v in fieldset.items() if k in masked_fields and k not in ignored_fields
+                k: np.array([])
+                for k, v in fieldset.items()
+                if k in masked_fields and k not in ignored_fields
             }
         else:
             masked_fields = {
