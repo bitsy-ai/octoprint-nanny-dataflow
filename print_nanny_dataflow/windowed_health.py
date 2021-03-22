@@ -16,7 +16,7 @@ import tarfile
 import numpy as np
 import tensorflow as tf
 import apache_beam as beam
-from typing import List, Tuple, Any, Iterable
+from typing import List, Tuple, Any, Iterable, Generator
 from apache_beam import window
 from apache_beam.options.pipeline_options import GoogleCloudOptions
 from apache_beam.options.pipeline_options import PipelineOptions
@@ -131,55 +131,48 @@ class WriteHealthCheckpoint(beam.DoFn):
     Emits all record paths within window size
     """
 
-    def __init__(self, checkpoint_sink, window_size, window_period, health_threshold=2):
+    def __init__(self, checkpoint_sink, window_size, window_period):
         self.checkpoint_sink = checkpoint_sink
         self.window_size = window_size
         self.window_period = window_period
         self.window_lookback = window_size // window_period
-        self.health_threshold = health_threshold
 
     def process(
         self,
         keyed_elements: Tuple[Any, Iterable[NestedTelemetryEvent]],
         window=beam.DoFn.WindowParam,
-    ) -> Tuple[str, Tuple[Iterable[str], Iterable[str]]]:
+    ):
 
         session, telemetry_events = keyed_elements
 
         base_path = os.path.join(self.checkpoint_sink, session)
         pq_glob_path = os.path.join(
             base_path,
-            "df",
-        )
-        csv_glob_path = os.path.join(
-            base_path,
-            "trend",
         )
 
-        logger.info(f"Globs {pq_glob_path} {csv_glob_path}")
+        window_start = int(window.start)
+        window_end = int(window.end)
         output_path = os.path.join(
             base_path,
-            "df",
-            f"{int(window.start)}_{int(window.end)}.parquet",
+            f"{window_start}_{window_end}.parquet",
         )
-        df = pd.concat([e.to_health_dataframe() for e in telemetry_events]).sort_values(
-            "ts"
-        )
+        df = pd.concat(
+            [
+                e.to_health_dataframe(window_start=window_start, window_end=window_end)
+                for e in telemetry_events
+            ]
+        ).sort_values("ts")
         df.to_parquet(output_path, engine="pyarrow")
         logger.info(f"Wrote {output_path}")
 
         gcs_client = beam.io.gcp.gcsio.GcsIO()
 
-        past_checkpoints = gcs_client.list_prefix(pq_glob_path).keys()
+        past_checkpoints = list(gcs_client.list_prefix(pq_glob_path).keys())
         if len(past_checkpoints) > self.window_lookback:
             # get most recent windows from selection
-            past_checkpoints = past_checkpoints[-self.window_lookback + 1]
+            past_checkpoints = past_checkpoints[-self.window_lookback :]
 
-        past_coefficients = gcs_client.list_prefix(csv_glob_path).keys()
-        if len(past_coefficients) > self.health_threshold:
-            past_coefficients = past_coefficients[-self.health_threshold + 1]
-
-        yield (session, (past_checkpoints, past_coefficients))
+        return past_checkpoints
 
 
 class CalcHealthScoreTrend(beam.DoFn):
@@ -192,7 +185,7 @@ class CalcHealthScoreTrend(beam.DoFn):
         api_token,
         health_threshold=3,
         polyfit_degree=1,
-        warmup=5,
+        warmup=3,
     ):
         self.health_threshold = health_threshold
         self.checkpoint_sink = checkpoint_sink
@@ -246,33 +239,26 @@ class CalcHealthScoreTrend(beam.DoFn):
 
     def process(
         self,
-        keyed_elements: Tuple[Any, Iterable[NestedTelemetryEvent]],
+        keyed_elements,
         window=beam.DoFn.WindowParam,
     ):
         session, telemetry_events = keyed_elements
 
-        if len(telemetry_events) <= self.warmup:
+        df = (
+            pd.DataFrame.from_records(telemetry_events)
+            .sort_values("ts")
+            .set_index(["ts", "detection_class"])
+        )
+
+        n_windows = len(df["window_start"].unique())
+        window_start = int(window.start)
+        window_end = int(window.end)
+        if n_windows <= self.warmup:
             logger.warning(
-                f"Ignoring CalcHealthScoreTrend called with n_telemetry_events={len(telemetry_events)} warmup={self.warmup} session={session} user_id={telemetry_events[0].user_id} window=({window.start}_{window.end})"
+                f"Ignoring CalcHealthScoreTrend called with n_windows={n_windows} warmup={self.warmup} session={session} window=({window_start}_{window_end})"
             )
             return
 
-        exploded_output_path = os.path.join(
-            self.checkpoint_sink,
-            session,
-            f"{window.start}_{window.end}",
-            "exploded.parquet",
-        )
-        trend_output_path = os.path.join(
-            self.checkpoint_sink, session, f"{window.start}_{window.end}", "trend.csv"
-        )
-
-        df = pd.concat([e.to_health_dataframe() for e in telemetry_events]).sort_values(
-            "ts"
-        )
-
-        # import pdb; pdb.set_trace()
-        df.to_parquet(exploded_output_path, engine="pyarrow")
         df = pd.concat(
             {
                 "unhealthy": df[
@@ -486,11 +472,11 @@ def run_pipeline(args, pipeline_args):
             # @todo implement BoundedSession
             # probably easier to port everything to Java before attempting this
             # https://www.oreilly.com/library/view/streaming-systems/9781491983867/ch04.html
-            health_models_by_device_id = (
+            health_per_session = (
                 parsed_dataset
                 | "Drop image bytes/Tensor"
                 >> beam.Map(lambda x: (x[0], x[1].drop_image_data()))
-                | "Drop detections outside of calibration area of interest"
+                | "Drop detections below confidence threshold & outside of calibration area of interest"
                 >> beam.ParDo(
                     FilterDetections(args.calibration_base_path, score_threshold=0.5)
                 )
@@ -510,17 +496,21 @@ def run_pipeline(args, pipeline_args):
                         args.health_window_period,
                     )
                 )
-                | "Print checkpoint paths" >> beam.Map(print)
-                # | "Calculate health score trend"
-                # >> beam.ParDo(
-                #     CalcHealthScoreTrend(
-                #         args.health_checkpoint_sink,
-                #         args.health_window_size,
-                #         args.api_url,
-                #         args.api_token,
-                #         health_threshold=3,
-                #     )
-                # )
+                | f"Load last {args.health_window_size}s parquet checkpoints"
+                >> beam.io.parquetio.ReadAllFromParquet()
+                | "Rekey by session id" >> beam.Map(lambda x: (x["session"], x))
+                | "Group by session id" >> beam.GroupByKey()
+                | "Calculate health score trend"
+                >> beam.ParDo(
+                    CalcHealthScoreTrend(
+                        args.health_checkpoint_sink,
+                        args.health_window_size,
+                        args.health_window_period,
+                        args.api_url,
+                        args.api_token,
+                        health_threshold=3,
+                    )
+                )
             )
 
 

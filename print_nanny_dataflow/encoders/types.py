@@ -242,11 +242,16 @@ class NestedTelemetryEvent:
             boxes_xmax=boxes_xmax,
         )
 
-    def to_health_dataframe(self) -> pd.DataFrame:
+    def to_health_dataframe(self, window_start: int, window_end: int) -> pd.DataFrame:
         data = {
             "ts": self.ts,
             "detection_class": self.detection_classes,
             "detection_score": self.detection_scores,
+            "window_start": window_start,
+            "window_end": window_end,
+            "session": self.session,
+            "user_id": self.user_id,
+            "device_id": self.device_id,
         }
         df = (
             pd.DataFrame.from_records([data])
