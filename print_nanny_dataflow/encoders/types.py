@@ -245,8 +245,8 @@ class NestedTelemetryEvent:
     def to_health_dataframe(self) -> pd.DataFrame:
         data = {
             "ts": self.ts,
-            "detection_classes": self.detection_classes,
-            "detection_scores": self.detection_scores,
+            "detection_class": self.detection_classes,
+            "detection_score": self.detection_scores,
         }
         df = (
             pd.DataFrame.from_records([data])
@@ -254,7 +254,8 @@ class NestedTelemetryEvent:
             .apply(pd.Series.explode)
             .reset_index()
         )
-        return df.set_index(["ts", "detection_classes"])
+
+        return df.set_index(["ts", "detection_class"])
 
     def asdict(self):
         return asdict(self)

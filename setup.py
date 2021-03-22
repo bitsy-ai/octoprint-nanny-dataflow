@@ -16,7 +16,14 @@ VERSION = "0.1.0"
 # prerequisite: setuptools
 # http://pypi.python.org/pypi/setuptools
 
-REQUIRES = ["apache-beam", "nptyping", "numpy", "pillow", "print_nanny_client"]
+REQUIRES = [
+    "apache-beam[gcp]",
+    "nptyping",
+    "numpy",
+    "pillow",
+    "print_nanny_client",
+    "gcsfs",
+]
 
 setup(
     name=NAME,

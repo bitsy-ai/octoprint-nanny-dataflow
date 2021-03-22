@@ -55,7 +55,6 @@ class RestAPIClient:
     @backoff.on_exception(
         backoff.expo,
         aiohttp.ClientConnectionError,
-        logger=logger,
         max_time=MAX_BACKOFF_TIME,
         jitter=backoff.random_jitter,
     )

@@ -125,44 +125,105 @@ async def download_active_experiment_model(tmp_dir=".tmp/", model_artifact_id=1)
     logger.info(f"Finished extracting {tmp_artifacts_tarball}")
 
 
+class WriteHealthCheckpoint(beam.DoFn):
+    """
+    Writes a SlidingWindow checkpoint to gcs
+    Emits all record paths within window size
+    """
+
+    def __init__(self, checkpoint_sink, window_size, window_period, health_threshold=2):
+        self.checkpoint_sink = checkpoint_sink
+        self.window_size = window_size
+        self.window_period = window_period
+        self.window_lookback = window_size // window_period
+        self.health_threshold = health_threshold
+
+    def process(
+        self,
+        keyed_elements: Tuple[Any, Iterable[NestedTelemetryEvent]],
+        window=beam.DoFn.WindowParam,
+    ) -> Tuple[str, Tuple[Iterable[str], Iterable[str]]]:
+
+        session, telemetry_events = keyed_elements
+
+        base_path = os.path.join(self.checkpoint_sink, session)
+        pq_glob_path = os.path.join(
+            base_path,
+            "df",
+        )
+        csv_glob_path = os.path.join(
+            base_path,
+            "trend",
+        )
+
+        logger.info(f"Globs {pq_glob_path} {csv_glob_path}")
+        output_path = os.path.join(
+            base_path,
+            "df",
+            f"{int(window.start)}_{int(window.end)}.parquet",
+        )
+        df = pd.concat([e.to_health_dataframe() for e in telemetry_events]).sort_values(
+            "ts"
+        )
+        df.to_parquet(output_path, engine="pyarrow")
+        logger.info(f"Wrote {output_path}")
+
+        gcs_client = beam.io.gcp.gcsio.GcsIO()
+
+        past_checkpoints = gcs_client.list_prefix(pq_glob_path).keys()
+        if len(past_checkpoints) > self.window_lookback:
+            # get most recent windows from selection
+            past_checkpoints = past_checkpoints[-self.window_lookback + 1]
+
+        past_coefficients = gcs_client.list_prefix(csv_glob_path).keys()
+        if len(past_coefficients) > self.health_threshold:
+            past_coefficients = past_coefficients[-self.health_threshold + 1]
+
+        yield (session, (past_checkpoints, past_coefficients))
+
+
 class CalcHealthScoreTrend(beam.DoFn):
     def __init__(
         self,
         checkpoint_sink,
         window_size,
+        window_period,
         api_url,
         api_token,
         health_threshold=3,
         polyfit_degree=1,
+        warmup=5,
     ):
         self.health_threshold = health_threshold
         self.checkpoint_sink = checkpoint_sink
         self.polyfit_degree = polyfit_degree
         self.window_size = window_size
+        self.window_period = window_period
+        self.warmup = warmup
 
-    def trailing_window_trends(
-        self, session: str, window: beam.DoFn.WindowParam
-    ) -> bool:
-        gcs_client = beam.io.gcp.gcsio.GcsIO()
+    # def trailing_window_trends(
+    #     self, session: str, window: beam.DoFn.WindowParam
+    # ) -> bool:
+    #     gcs_client = beam.io.gcp.gcsio.GcsIO()
 
-        # if health trending download, look back at past n observations and alert if health_threshold is exceeded
-        past_trend_dfs = []
-        for n in range(1, self.health_threshold):
+    #     # if health trending download, look back at past n observations and alert if health_threshold is exceeded
+    #     past_trend_dfs = []
+    #     for n in range(1, self.health_threshold):
 
-            window_start = window.start - (n * self.window_size)
-            window_end = window.end - (n * self.window_size)
-            read_csv_path = os.path.join(
-                self.checkpoint_sink,
-                session,
-                f"{window_start}_{window_end}",
-                "trend.csv",
-            )
+    #         window_start = window.start - self.window_size
+    #         window_end = window.end - (n * self.window_size)
+    #         read_csv_path = os.path.join(
+    #             self.checkpoint_sink,
+    #             session,
+    #             f"{window_start}_{window_end}",
+    #             "trend.csv",
+    #         )
 
-            if gcs_client.exists(read_csv_path):
-                past_trend_df = pd.read_csv(past_trend_df)
-                past_trend_dfs.append(past_trend_df)
-
-        return pd.concat(past_trend_dfs)
+    #         if gcs_client.exists(read_csv_path):
+    #             past_trend_df = pd.read_csv(past_trend_df)
+    #             past_trend_dfs.append(past_trend_df)
+    #     if len(past_trend_df) > 0:
+    #         return pd.concat(past_trend_dfs)
 
     def should_alert(
         self, trailing_trend_df: pd.DataFrame, current_trend_df: pd.DataFrame
@@ -190,9 +251,11 @@ class CalcHealthScoreTrend(beam.DoFn):
     ):
         session, telemetry_events = keyed_elements
 
-        logger.info(
-            f"CalcHealthScoreTrend window_start={window.start} window_end={window.end} num events={len(telemetry_events)} ts range={telemetry_events[0].ts},{telemetry_events[-1].ts}"
-        )
+        if len(telemetry_events) <= self.warmup:
+            logger.warning(
+                f"Ignoring CalcHealthScoreTrend called with n_telemetry_events={len(telemetry_events)} warmup={self.warmup} session={session} user_id={telemetry_events[0].user_id} window=({window.start}_{window.end})"
+            )
+            return
 
         exploded_output_path = os.path.join(
             self.checkpoint_sink,
@@ -204,36 +267,56 @@ class CalcHealthScoreTrend(beam.DoFn):
             self.checkpoint_sink, session, f"{window.start}_{window.end}", "trend.csv"
         )
 
-        df = pd.concat([e.explode_detections() for e in telemetry_events]).sort_values(
+        df = pd.concat([e.to_health_dataframe() for e in telemetry_events]).sort_values(
             "ts"
         )
+
+        # import pdb; pdb.set_trace()
         df.to_parquet(exploded_output_path, engine="pyarrow")
         df = pd.concat(
             {
-                "unhealthy": df[df["detection_classes"].isin(NEGATIVE_LABELS)],
-                "healthy": df[df["detection_classes"].isin(POSITIVE_LABELS)],
+                "unhealthy": df[
+                    df.index.get_level_values("detection_class").isin(
+                        NEGATIVE_LABELS.keys()
+                    )
+                ],
+                "healthy": df[
+                    df.index.get_level_values("detection_class").isin(
+                        POSITIVE_LABELS.keys()
+                    )
+                ],
             }
         ).reset_index()
 
         mask = df.level_0 == "unhealthy"
-        healthy_cumsum = np.log10(
-            df[~mask].groupby("frame_id")["detection_scores"].sum().cumsum()
+        healthy_cumsum = (
+            df[~mask].groupby("detection_class")["detection_score"].sum().cumsum()
         )
 
-        unhealthy_cumsum = np.log10(
-            df[mask].groupby("frame_id")["detection_scores"].sum().cumsum()
+        unhealthy_cumsum = (
+            df[mask].groupby("detection_class")["detection_score"].sum().cumsum()
         )
 
         xy = healthy_cumsum.subtract(unhealthy_cumsum, fill_value=0)
-        trend = np.polynomial.polynomial.Polynomial.fit(xy.index, xy, degree)
+
+        import pdb
+
+        pdb.set_trace()
+
+        if len(xy) <= 1:
+            logger.info(f"Length of cumulative sum <= 1 {xy}")
+            return
+        trend = np.polynomial.polynomial.Polynomial.fit(
+            xy.index, xy, self.polyfit_degree
+        )
 
         slope, intercept = tuple(trend)
 
         current_trend_df = pd.DataFrame(
-            tuple(scope, intercept, window.start, window.end),
+            [[slope, intercept, window.start, window.end]],
             columns=["slope", "intercept", "window_start", "window_end"],
         )
-        current_trend_df.write_csv(trend_output_path)
+        current_trend_df.to_csv(trend_output_path)
 
         # if health trending download, look back at past n observations and alert if health_threshold is exceeded
         if slope < 0:
@@ -313,20 +396,23 @@ class FilterDetections(beam.DoFn):
 
             coordinates = calibration_json["coordinates"]
             event = NestedTelemetryEvent.calibration_filter(event, coordinates)
-        yield (session, event)
+
+        if event.num_detections >= 1:
+            yield (session, event)
 
 
 def run_pipeline(args, pipeline_args):
-    topic_path = os.path.join("projects", args.project, "topics", args.topic)
     logging.basicConfig(level=getattr(logging, args.loglevel))
 
     beam_options = PipelineOptions(
         pipeline_args, save_main_session=True, streaming=True, runner=args.runner
     )
 
+    topic_path = os.path.join("projects", args.project, "topics", args.topic)
+
     # download model tarball
     if args.runner == "DataflowRunner":
-        asyncio.run(download_active_experiment_model())
+        asyncio.get_event_loop.run_until_complete(download_active_experiment_model())
 
     # load input shape from model metadata
     model_path = os.path.join(args.tmp_dir, args.model_version, "model.tflite")
@@ -416,17 +502,32 @@ def run_pipeline(args, pipeline_args):
                     )
                 )
                 | "Group by key" >> beam.GroupByKey()
-                | "Calculate health score trend"
+                | "Write health checkpoint"
                 >> beam.ParDo(
-                    CalcHealthScoreTrend(
+                    WriteHealthCheckpoint(
                         args.health_checkpoint_sink,
                         args.health_window_size,
-                        args.api_url,
-                        args.api_token,
-                        health_threshold=3,
+                        args.health_window_period,
                     )
                 )
+                | "Print checkpoint paths" >> beam.Map(print)
+                # | "Calculate health score trend"
+                # >> beam.ParDo(
+                #     CalcHealthScoreTrend(
+                #         args.health_checkpoint_sink,
+                #         args.health_window_size,
+                #         args.api_url,
+                #         args.api_token,
+                #         health_threshold=3,
+                #     )
+                # )
             )
+
+
+# class WindowedHealthOptions(PipelineOptions):
+
+#   @classmethod
+#   def _add_argparse_args(cls, parser):
 
 
 if __name__ == "__main__":
@@ -435,7 +536,6 @@ if __name__ == "__main__":
     )
 
     parser.add_argument("--loglevel", default="INFO")
-
     parser.add_argument("--project", default="print-nanny-sandbox")
 
     parser.add_argument(
@@ -476,13 +576,13 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--health-window-size",
-        default=60 * 5,
+        default=60 * 10,
         help="Size of sliding event window (in seconds)",
     )
 
     parser.add_argument(
         "--health-window-period",
-        default=60,
+        default=30,
         help="Size of sliding event window slices (in seconds)",
     )
 
