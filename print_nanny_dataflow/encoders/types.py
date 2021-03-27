@@ -1,4 +1,4 @@
-import typing
+from typing import Tuple, Dict, Any, NamedTuple
 import pandas as pd
 import numpy as np
 import nptyping as npt
@@ -19,6 +19,14 @@ DETECTION_LABELS = {
     5: "raft",
 }
 
+HEALTH_MULTIPLER = {
+    1: 0,
+    2: -1,
+    3: -1,
+    4: 1,
+    5: 0
+}
+
 NEUTRAL_LABELS = {1: "nozzle", 5: "raft"}
 
 NEGATIVE_LABELS = {
@@ -31,16 +39,14 @@ POSITIVE_LABELS = {
 }
 
 
-@dataclass
-class Image:
+class Image(NamedTuple):
     height: int
     width: int
     data: bytes
     # ndarray: np.ndarray
 
 
-@dataclass
-class Box:
+class Box(NamedTuple):
     detection_score: npt.Float32
     detection_class: npt.Int32
     ymin: npt.Float32
@@ -48,61 +54,71 @@ class Box:
     ymax: npt.Float32
     xmax: npt.Float32
 
-
-@dataclass
-class BoundingBoxAnnotation:
+class BoundingBoxAnnotation(NamedTuple):
     num_detections: int
     detection_scores: np.ndarray
     detection_boxes: np.ndarray
     detection_classes: np.ndarray
 
 
-@dataclass
-class MonitoringFrame:
+class MonitoringFrame(NamedTuple):
     ts: int
     image: Image
     bounding_boxes: BoundingBoxAnnotation = None
 
 
-@dataclass
-class FlatTelemetryEvent:
+class WindowedHealthRecord(NamedTuple):
     """
-    flattened data structures for
-    tensorflow_transform.tf_metadata.schema_utils.schema_from_tf_feature_spec
+    Many FlatTelemetryEvent : 1 Monitoring Frame
     """
 
     ts: int
     client_version: str
-    event_type: int
-    event_data_type: int
     session: str
-
-    # Image
-    image_data: tf.Tensor
-    image_width: npt.Float32
-    image_height: npt.Float32
 
     # Metadata
     user_id: npt.Float32
     device_id: npt.Float32
     device_cloudiot_id: npt.Float32
 
-    # BoundingBoxes
+    health_score: npt.Float32
+    health_multiplier: npt.Float32
     detection_score: npt.Float32
     detection_class: npt.Int32
-    num_detections: npt.Int32
-    box_ymin: npt.Float32
-    box_xmin: npt.Float32
-    box_ymax: npt.Float32
-    box_xmax: npt.Float32
-    image_tensor: tf.Tensor
+    
+    window_start: npt.Int32
+    window_end: npt.Int32
+    
 
+    def to_dict(self) -> Dict[str, Any]:
+        return self._asdict()
+    def to_dataframe(self) -> pd.DataFrame:
+        return pd.DataFrame(self.to_dict(), index=["ts", "detection_class"])
 
-@dataclass
-class NestedTelemetryEvent:
+    @staticmethod
+    def records_to_health_dataframe(records) -> pd.DataFrame:
+        data = {
+            "ts": self.ts,
+            "detection_class": self.detection_classes,
+            "detection_score": self.detection_scores,
+            "window_start": window_start,
+            "window_end": window_end,
+            "session": self.session,
+            "user_id": self.user_id,
+            "device_id": self.device_id,
+        }
+        df = (
+            pd.DataFrame.from_records([data])
+            .set_index("ts")
+            .apply(pd.Series.explode)
+            .reset_index()
+        )
+
+        return df.set_index(["ts", "detection_class"])
+
+class NestedTelemetryEvent(NamedTuple):
     """
-    flattened data structures for
-    tensorflow_transform.tf_metadata.schema_utils.schema_from_tf_feature_spec
+    1 NestedTelemetryEvent : 1 Monitoring Frame
     """
 
     ts: int
@@ -242,29 +258,11 @@ class NestedTelemetryEvent:
             boxes_xmax=boxes_xmax,
         )
 
-    def to_health_dataframe(self, window_start: int, window_end: int) -> pd.DataFrame:
-        data = {
-            "ts": self.ts,
-            "detection_class": self.detection_classes,
-            "detection_score": self.detection_scores,
-            "window_start": window_start,
-            "window_end": window_end,
-            "session": self.session,
-            "user_id": self.user_id,
-            "device_id": self.device_id,
-        }
-        df = (
-            pd.DataFrame.from_records([data])
-            .set_index("ts")
-            .apply(pd.Series.explode)
-            .reset_index()
-        )
 
-        return df.set_index(["ts", "detection_class"])
-
-    def asdict(self):
-        return asdict(self)
-
+    def to_dict(self) -> Dict[str, Any]:
+        return self._asdict()
+    def to_dataframe(self) -> pd.DataFrame:
+        return pd.DataFrame(self.to_dict())
     def flatten(self):
         array_fields = [
             "detection_scores",
@@ -275,7 +273,7 @@ class NestedTelemetryEvent:
             "boxes_xmax",
         ]
         default_fieldset = {
-            k: v for k, v in self.asdict().items() if k not in array_fields
+            k: v for k, v in self.to_dict().items() if k not in array_fields
         }
         return (
             FlatTelemetryEvent(
@@ -292,7 +290,7 @@ class NestedTelemetryEvent:
 
     def drop_image_data(self):
         exclude = ["image_data", "image_tensor"]
-        fieldset = self.asdict()
+        fieldset = self.to_dict()
         return self.__class__(**{k: v for k, v in fieldset.items() if k not in exclude})
 
     def min_score_filter(self, score_threshold=0.5):
@@ -305,7 +303,7 @@ class NestedTelemetryEvent:
             "boxes_xmax",
         ]
         ignored_fields = ["num_detections"]
-        fieldset = self.asdict()
+        fieldset = self.to_dict()
         mask = self.detection_scores >= score_threshold
 
         default_fieldset = {
@@ -329,7 +327,7 @@ class NestedTelemetryEvent:
             **default_fieldset, **masked_fields, num_detections=np.count_nonzero(mask)
         )
 
-    def percent_intersection(self, aoi_coords: typing.Tuple[float]):
+    def percent_intersection(self, aoi_coords: Tuple[float]):
         """
         Returns intersection-over-union area, normalized between 0 and 1
         """
@@ -395,7 +393,7 @@ class NestedTelemetryEvent:
             "num_detections",
         ]
         default_fieldset = {
-            k: v for k, v in self.asdict().items() if k not in filter_fields
+            k: v for k, v in self.to_dict().items() if k not in filter_fields
         }
         boxes_ymin, boxes_xmin, boxes_ymax, boxes_xmax = detection_boxes.T
         return self.__class__(
