@@ -23,9 +23,12 @@ from apache_beam.options.pipeline_options import PipelineOptions
 import PIL
 from tensorflow_transform.beam import impl as beam_impl
 from tensorflow_serving.apis import predict_pb2
+from apache_beam.dataframe.convert import to_dataframe
+from apache_beam.dataframe.transforms import DataframeTransform
+from apache_beam.transforms import trigger
 
 from encoders.tfrecord_example import ExampleProtoEncoder
-from encoders.types import NestedTelemetryEvent, FlatTelemetryEvent
+from encoders.types import NestedTelemetryEvent, WindowedHealthRecord
 from clients.rest import RestAPIClient
 import pyarrow as pa
 
@@ -39,16 +42,7 @@ DETECTION_LABELS = {
     5: "raft",
 }
 
-NEUTRAL_LABELS = {1: "nozzle", 5: "raft"}
-
-NEGATIVE_LABELS = {
-    2: "adhesion",
-    3: "spaghetti",
-}
-
-POSITIVE_LABELS = {
-    4: "print",
-}
+HEALTH_MULTIPLER = {1: 0, 2: -1, 3: -1, 4: 1, 5: 0}
 
 
 class WriteBatchedTFRecords(beam.DoFn):
@@ -90,7 +84,7 @@ class WriteBatchedParquet(beam.DoFn):
         )
 
         yield (
-            e.asdict()
+            e.to_dict()
             for e in elements
             | beam.io.parquetio.WriteToParquet(output_path, self.schema)
         )
@@ -102,7 +96,7 @@ def write_batched_parquet(batched_elements, parquet_base_path, schema):
         parquet_base_path, session, str(int(datetime.now().timestamp()))
     )
 
-    elements = beam.Create([e.asdict() for e in elements])
+    elements = beam.Create([e.to_dict() for e in elements])
     return elements | beam.io.parquetio.WriteToParquet(output_path, schema)
 
 
@@ -139,11 +133,11 @@ class WriteHealthCheckpoint(beam.DoFn):
 
     def process(
         self,
-        keyed_elements: Tuple[Any, Iterable[NestedTelemetryEvent]],
+        keyed_elements: Tuple[Any, Iterable[WindowedHealthRecord]],
         window=beam.DoFn.WindowParam,
     ):
 
-        session, telemetry_events = keyed_elements
+        session, health_records = keyed_elements
 
         base_path = os.path.join(self.checkpoint_sink, session)
         pq_glob_path = os.path.join(
@@ -156,12 +150,7 @@ class WriteHealthCheckpoint(beam.DoFn):
             base_path,
             f"{window_start}_{window_end}.parquet",
         )
-        df = pd.concat(
-            [
-                e.to_health_dataframe(window_start=window_start, window_end=window_end)
-                for e in telemetry_events
-            ]
-        ).sort_values("ts")
+        df = pd.concat([e.to_dataframe() for e in health_records]).sort_values("ts")
         df.to_parquet(output_path, engine="pyarrow")
         logger.info(f"Wrote {output_path}")
 
@@ -173,6 +162,37 @@ class WriteHealthCheckpoint(beam.DoFn):
             past_checkpoints = past_checkpoints[-self.window_lookback :]
 
         return past_checkpoints
+
+
+class AsWindowedHealthRecord(beam.DoFn):
+    def process(self, event: NestedTelemetryEvent, window=beam.DoFn.WindowParam):
+        window_start = int(window.start)
+        window_end = int(window.end)
+        return [
+            WindowedHealthRecord(
+                ts=event.ts,
+                session=event.session,
+                client_version=event.client_version,
+                user_id=event.user_id,
+                device_id=event.device_id,
+                device_cloudiot_id=event.device_cloudiot_id,
+                detection_score=event.detection_scores[i],
+                detection_class=event.detection_classes[i],
+                window_start=window_start,
+                window_end=window_end,
+                health_multiplier=HEALTH_MULTIPLER[event.detection_classes[i]],
+                health_score=HEALTH_MULTIPLER[event.detection_classes[i]]
+                * event.detection_scores[i],
+            )
+            for i in range(0, event.num_detections)
+        ]
+
+
+def absolute_log(df, log_fn=np.log2):
+    """
+    Get the log of absolute value and multiply by original sign
+    """
+    return log_fn(np.abs(df))
 
 
 class CalcHealthScoreTrend(beam.DoFn):
@@ -193,30 +213,6 @@ class CalcHealthScoreTrend(beam.DoFn):
         self.window_size = window_size
         self.window_period = window_period
         self.warmup = warmup
-
-    # def trailing_window_trends(
-    #     self, session: str, window: beam.DoFn.WindowParam
-    # ) -> bool:
-    #     gcs_client = beam.io.gcp.gcsio.GcsIO()
-
-    #     # if health trending download, look back at past n observations and alert if health_threshold is exceeded
-    #     past_trend_dfs = []
-    #     for n in range(1, self.health_threshold):
-
-    #         window_start = window.start - self.window_size
-    #         window_end = window.end - (n * self.window_size)
-    #         read_csv_path = os.path.join(
-    #             self.checkpoint_sink,
-    #             session,
-    #             f"{window_start}_{window_end}",
-    #             "trend.csv",
-    #         )
-
-    #         if gcs_client.exists(read_csv_path):
-    #             past_trend_df = pd.read_csv(past_trend_df)
-    #             past_trend_dfs.append(past_trend_df)
-    #     if len(past_trend_df) > 0:
-    #         return pd.concat(past_trend_dfs)
 
     def should_alert(
         self, trailing_trend_df: pd.DataFrame, current_trend_df: pd.DataFrame
@@ -239,17 +235,16 @@ class CalcHealthScoreTrend(beam.DoFn):
 
     def process(
         self,
-        keyed_elements,
+        keyed_elements: Tuple[str, Iterable[WindowedHealthRecord]],
         window=beam.DoFn.WindowParam,
     ):
-        session, telemetry_events = keyed_elements
+        session, windowed_health_records = keyed_elements
 
         df = (
-            pd.DataFrame.from_records(telemetry_events)
+            pd.DataFrame(data=windowed_health_records)
             .sort_values("ts")
             .set_index(["ts", "detection_class"])
         )
-
         n_windows = len(df["window_start"].unique())
         window_start = int(window.start)
         window_end = int(window.end)
@@ -259,58 +254,60 @@ class CalcHealthScoreTrend(beam.DoFn):
             )
             return
 
-        df = pd.concat(
-            {
-                "unhealthy": df[
-                    df.index.get_level_values("detection_class").isin(
-                        NEGATIVE_LABELS.keys()
-                    )
-                ],
-                "healthy": df[
-                    df.index.get_level_values("detection_class").isin(
-                        POSITIVE_LABELS.keys()
-                    )
-                ],
-            }
-        ).reset_index()
-
-        mask = df.level_0 == "unhealthy"
-        healthy_cumsum = (
-            df[~mask].groupby("detection_class")["detection_score"].sum().cumsum()
+        cumsum = (
+            df[df["health_multiplier"] > 0]
+            .groupby(["window_start"])["health_score"]
+            .sum()
+            .apply(absolute_log)
+            .subtract(
+                df[df["health_multiplier"] < 0]
+                .groupby(["window_start"])["health_score"]
+                .sum()
+                .apply(absolute_log),
+                fill_value=0,
+            )
         )
+        #     df[ df["health_multiplier"] <= 0].groupby(["ts", "health_multiplier"])["detection_score"].sum().apply(np.log2)
+        # )
 
-        unhealthy_cumsum = (
-            df[mask].groupby("detection_class")["detection_score"].sum().cumsum()
-        )
-
-        xy = healthy_cumsum.subtract(unhealthy_cumsum, fill_value=0)
-
+        # .cumsum()
         import pdb
 
         pdb.set_trace()
+        # xy = (cumsum[cumsum.index.get_level_values("health") == 1]).subtract(
+        #     cumsum[cumsum.index.get_level_values("health") == -1], fill_value=0
+        # )
 
-        if len(xy) <= 1:
-            logger.info(f"Length of cumulative sum <= 1 {xy}")
-            return
-        trend = np.polynomial.polynomial.Polynomial.fit(
-            xy.index, xy, self.polyfit_degree
-        )
+        # import pdb
 
-        slope, intercept = tuple(trend)
+        # pdb.set_trace()
+        # xy = df.groupby(["health", "ts"])["detection_score"].sum().diff().fillna(0)
+        # if len(xy) <= 1:
+        #     logger.info(f"Length of cumulative sum <= 1 {xy}")
+        #     return
+        # trend = np.polynomial.polynomial.Polynomial.fit(
+        #     xy.index, xy, self.polyfit_degree
+        # )
 
-        current_trend_df = pd.DataFrame(
-            [[slope, intercept, window.start, window.end]],
-            columns=["slope", "intercept", "window_start", "window_end"],
-        )
-        current_trend_df.to_csv(trend_output_path)
+        # slope, intercept = tuple(trend)
+        # xy = healthy_cumsum.subtract(unhealthy_cumsum, fill_value=0)
 
-        # if health trending download, look back at past n observations and alert if health_threshold is exceeded
-        if slope < 0:
-            trailing_trend_df = self.trailing_window_trends(session, window)
-            if self.should_alert(trailing_trend_df, current_trend_df):
-                res = asyncio.get_event_loop().run_until_complete(send_alert_async())
+        # import pdb
 
-        res = asyncio.get_event_loop().run_until_complete(send_alert_async())
+        # pdb.set_trace()
+        # current_trend_df = pd.DataFrame(
+        #     [[slope, intercept, window.start, window.end]],
+        #     columns=["slope", "intercept", "window_start", "window_end"],
+        # )
+        # current_trend_df.to_csv(trend_output_path)
+
+        # # if health trending download, look back at past n observations and alert if health_threshold is exceeded
+        # if slope < 0:
+        #     trailing_trend_df = self.trailing_window_trends(session, window)
+        #     if self.should_alert(trailing_trend_df, current_trend_df):
+        #         res = asyncio.get_event_loop().run_until_complete(send_alert_async())
+
+        # res = asyncio.get_event_loop().run_until_complete(send_alert_async())
 
 
 def predict_bounding_boxes(element, model_path):
@@ -343,7 +340,7 @@ def predict_bounding_boxes(element, model_path):
         boxes_ymax=ymax,
         boxes_xmax=xmax,
     )
-    defaults = element.asdict()
+    defaults = element.to_dict()
     defaults.update(params)
     return NestedTelemetryEvent(**defaults)
 
@@ -360,10 +357,7 @@ class FilterDetections(beam.DoFn):
         self.score_threshold = score_threshold
         self.calibration_filename = calibration_filename
 
-    def process(
-        self, keyed_row: Tuple[Any, NestedTelemetryEvent]
-    ) -> Tuple[Any, NestedTelemetryEvent]:
-        session, event = keyed_row
+    def process(self, event: NestedTelemetryEvent) -> Iterable[NestedTelemetryEvent]:
         gcs_client = beam.io.gcp.gcsio.GcsIO()
 
         device_id = event.device_id
@@ -384,7 +378,7 @@ class FilterDetections(beam.DoFn):
             event = NestedTelemetryEvent.calibration_filter(event, coordinates)
 
         if event.num_detections >= 1:
-            yield (session, event)
+            yield event
 
 
 def run_pipeline(args, pipeline_args):
@@ -428,9 +422,13 @@ def run_pipeline(args, pipeline_args):
                 >> beam.Map(lambda x: beam.window.TimestampedValue(x, x.ts))
                 | "Add Bounding Box Annotations"
                 >> beam.Map(lambda x: predict_bounding_boxes(x, model_path))
-                | "Key by session id" >> beam.Map(lambda x: (x.session, x))
             )
 
+            parsed_dataset_by_session = (
+                parsed_dataset
+                | "Key NestedTelemetryEvent by session id"
+                >> beam.Map(lambda x: (x.session, x))
+            )
             tf_feature_spec = NestedTelemetryEvent.tf_feature_spec(args.num_detections)
             metadata = NestedTelemetryEvent.tfrecord_metadata(tf_feature_spec)
 
@@ -474,19 +472,23 @@ def run_pipeline(args, pipeline_args):
             # https://www.oreilly.com/library/view/streaming-systems/9781491983867/ch04.html
             health_per_session = (
                 parsed_dataset
-                | "Drop image bytes/Tensor"
-                >> beam.Map(lambda x: (x[0], x[1].drop_image_data()))
                 | "Drop detections below confidence threshold & outside of calibration area of interest"
                 >> beam.ParDo(
                     FilterDetections(args.calibration_base_path, score_threshold=0.5)
                 )
-                # @todo implement area of interest filter
                 | "Add sliding window"
                 >> beam.WindowInto(
                     beam.transforms.window.SlidingWindows(
                         args.health_window_size, args.health_window_period
-                    )
+                    ),
                 )
+                | "Flatten remaining observations in NestedTelemetryEvent"
+                >> beam.ParDo(AsWindowedHealthRecord()).with_output_types(
+                    WindowedHealthRecord
+                )
+                # | DataframeTransform(lambda df: df.groupby(['session', 'window_start', 'window_end']).sum())
+                | "Key WindowedHealthRecord by session"
+                >> beam.Map(lambda e: (e.session, e))
                 | "Group by key" >> beam.GroupByKey()
                 | "Write health checkpoint"
                 >> beam.ParDo(
@@ -512,12 +514,6 @@ def run_pipeline(args, pipeline_args):
                     )
                 )
             )
-
-
-# class WindowedHealthOptions(PipelineOptions):
-
-#   @classmethod
-#   def _add_argparse_args(cls, parser):
 
 
 if __name__ == "__main__":
