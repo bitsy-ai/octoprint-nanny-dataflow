@@ -19,13 +19,7 @@ DETECTION_LABELS = {
     5: "raft",
 }
 
-HEALTH_MULTIPLER = {
-    1: 0,
-    2: -1,
-    3: -1,
-    4: 1,
-    5: 0
-}
+HEALTH_MULTIPLER = {1: 0, 2: -0.5, 3: -0.5, 4: 1, 5: 0}
 
 NEUTRAL_LABELS = {1: "nozzle", 5: "raft"}
 
@@ -53,6 +47,7 @@ class Box(NamedTuple):
     xmin: npt.Float32
     ymax: npt.Float32
     xmax: npt.Float32
+
 
 class BoundingBoxAnnotation(NamedTuple):
     num_detections: int
@@ -85,13 +80,13 @@ class WindowedHealthRecord(NamedTuple):
     health_multiplier: npt.Float32
     detection_score: npt.Float32
     detection_class: npt.Int32
-    
-    window_start: npt.Int32
-    window_end: npt.Int32
-    
+
+    window_start: int
+    window_end: int
 
     def to_dict(self) -> Dict[str, Any]:
         return self._asdict()
+
     def to_dataframe(self) -> pd.DataFrame:
         return pd.DataFrame(self.to_dict(), index=["ts", "detection_class"])
 
@@ -115,6 +110,7 @@ class WindowedHealthRecord(NamedTuple):
         )
 
         return df.set_index(["ts", "detection_class"])
+
 
 class NestedTelemetryEvent(NamedTuple):
     """
@@ -239,7 +235,7 @@ class NestedTelemetryEvent(NamedTuple):
         return cls(
             ts=obj.metadata.ts,
             session=obj.metadata.session.decode("utf-8"),
-            client_version=obj.metadata.clientVersion,
+            client_version=obj.metadata.clientVersion.decode("utf-8"),
             event_type=obj.eventType,
             event_data_type=obj.eventDataType,
             image_height=obj.eventData.image.height,
@@ -258,11 +254,12 @@ class NestedTelemetryEvent(NamedTuple):
             boxes_xmax=boxes_xmax,
         )
 
-
     def to_dict(self) -> Dict[str, Any]:
         return self._asdict()
+
     def to_dataframe(self) -> pd.DataFrame:
         return pd.DataFrame(self.to_dict())
+
     def flatten(self):
         array_fields = [
             "detection_scores",
