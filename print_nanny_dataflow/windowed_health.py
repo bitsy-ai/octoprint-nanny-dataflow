@@ -42,7 +42,7 @@ DETECTION_LABELS = {
     5: "raft",
 }
 
-HEALTH_MULTIPLER = {1: 0, 2: -1, 3: -1, 4: 1, 5: 0}
+HEALTH_WEIGHTS = {1: 0, 2: -0.5, 3: -0.5, 4: 1, 5: 0}
 
 
 class WriteBatchedTFRecords(beam.DoFn):
@@ -180,8 +180,8 @@ class AsWindowedHealthRecord(beam.DoFn):
                 detection_class=event.detection_classes[i],
                 window_start=window_start,
                 window_end=window_end,
-                health_multiplier=HEALTH_MULTIPLER[event.detection_classes[i]],
-                health_score=HEALTH_MULTIPLER[event.detection_classes[i]]
+                health_multiplier=HEALTH_WEIGHTS[event.detection_classes[i]],
+                health_score=HEALTH_WEIGHTS[event.detection_classes[i]]
                 * event.detection_scores[i],
             )
             for i in range(0, event.num_detections)
@@ -256,21 +256,20 @@ class CalcHealthScoreTrend(beam.DoFn):
 
         cumsum = (
             df[df["health_multiplier"] > 0]
-            .groupby(["window_start"])["health_score"]
+            .groupby(["ts", "detection_class"])["health_score"]
+            .max()
             .sum()
             .apply(absolute_log)
             .subtract(
                 df[df["health_multiplier"] < 0]
-                .groupby(["window_start"])["health_score"]
+                .groupby(["ts", "detection_class"])["health_score"]
+                .max()
                 .sum()
                 .apply(absolute_log),
                 fill_value=0,
             )
         )
-        #     df[ df["health_multiplier"] <= 0].groupby(["ts", "health_multiplier"])["detection_score"].sum().apply(np.log2)
-        # )
 
-        # .cumsum()
         import pdb
 
         pdb.set_trace()
@@ -528,6 +527,12 @@ if __name__ == "__main__":
         "--topic",
         default="monitoring-frame-raw",
         help="PubSub topic",
+    )
+
+    parser.add_argument(
+        "--quiet",
+        default=False,
+        help="Enable quiet mode to only log results and supress alert sending",
     )
 
     parser.add_argument(
