@@ -29,6 +29,7 @@ from apache_beam.transforms import trigger
 
 from encoders.tfrecord_example import ExampleProtoEncoder
 from encoders.types import NestedTelemetryEvent, WindowedHealthRecord
+from models.health_score import health_score_trend_polynormial_v1
 from clients.rest import RestAPIClient
 import pyarrow as pa
 
@@ -254,59 +255,25 @@ class CalcHealthScoreTrend(beam.DoFn):
             )
             return
 
-        cumsum = (
+        trend = health_score_trend_polynormial_v1(df, degree=self.polyfit_degree)
+
+        xy = (
             df[df["health_multiplier"] > 0]
-            .groupby(["ts", "detection_class"])["health_score"]
+            .groupby(["window_start"])["health_score"]
             .max()
-            .sum()
-            .apply(absolute_log)
-            .subtract(
+            .add(
                 df[df["health_multiplier"] < 0]
-                .groupby(["ts", "detection_class"])["health_score"]
-                .max()
-                .sum()
-                .apply(absolute_log),
+                .groupby(["window_start"])["health_score"]
+                .min(),
                 fill_value=0,
             )
         )
 
-        import pdb
+        trend = np.polynomial.polynomial.Polynomial.fit(
+            xy.index, xy, self.polyfit_degree
+        )
 
-        pdb.set_trace()
-        # xy = (cumsum[cumsum.index.get_level_values("health") == 1]).subtract(
-        #     cumsum[cumsum.index.get_level_values("health") == -1], fill_value=0
-        # )
-
-        # import pdb
-
-        # pdb.set_trace()
-        # xy = df.groupby(["health", "ts"])["detection_score"].sum().diff().fillna(0)
-        # if len(xy) <= 1:
-        #     logger.info(f"Length of cumulative sum <= 1 {xy}")
-        #     return
-        # trend = np.polynomial.polynomial.Polynomial.fit(
-        #     xy.index, xy, self.polyfit_degree
-        # )
-
-        # slope, intercept = tuple(trend)
-        # xy = healthy_cumsum.subtract(unhealthy_cumsum, fill_value=0)
-
-        # import pdb
-
-        # pdb.set_trace()
-        # current_trend_df = pd.DataFrame(
-        #     [[slope, intercept, window.start, window.end]],
-        #     columns=["slope", "intercept", "window_start", "window_end"],
-        # )
-        # current_trend_df.to_csv(trend_output_path)
-
-        # # if health trending download, look back at past n observations and alert if health_threshold is exceeded
-        # if slope < 0:
-        #     trailing_trend_df = self.trailing_window_trends(session, window)
-        #     if self.should_alert(trailing_trend_df, current_trend_df):
-        #         res = asyncio.get_event_loop().run_until_complete(send_alert_async())
-
-        # res = asyncio.get_event_loop().run_until_complete(send_alert_async())
+        yield xy, trend
 
 
 def predict_bounding_boxes(element, model_path):
@@ -512,6 +479,7 @@ def run_pipeline(args, pipeline_args):
                         health_threshold=3,
                     )
                 )
+                | "Print df and trend data" >> beam.Map(print)
             )
 
 
