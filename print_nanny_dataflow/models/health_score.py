@@ -6,8 +6,8 @@ logger = logging.getLogger(__name__)
 
 
 def health_score_trend_polynormial_v1(
-    df: pd.DataFame, degree=1
-) -> numpy.polynomial.polynomial.Polynomial:
+    df: pd.DataFrame, degree=1
+) -> np.polynomial.polynomial.Polynomial:
     """
     Takes a pandas DataFrame of WindowedHealthRecords and returns a polynormial fit to degree
     """

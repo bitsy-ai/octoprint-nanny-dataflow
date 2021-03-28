@@ -215,13 +215,11 @@ class CalcHealthScoreTrend(beam.DoFn):
         self.window_period = window_period
         self.warmup = warmup
 
-    def should_alert(
-        self, trailing_trend_df: pd.DataFrame, current_trend_df: pd.DataFrame
-    ) -> bool:
-        df = trailing_trend_df.concat(current_trend_df)
-        return len(df["slope"] < 0) >= self.health_threshold
+    def should_alert(self, trend: np.polynomial.polynomial.Polynomial) -> bool:
+        slope, intercept = tuple(trend)
+        return slope < 0
 
-    async def send_alert_async(
+    async def trigger_alert_async(
         self, session: str, telemetry_event: NestedTelemetryEvent
     ):
         rest_client = RestAPIClient(api_token=self.api_token, api_url=self.api_url)
@@ -257,22 +255,13 @@ class CalcHealthScoreTrend(beam.DoFn):
 
         trend = health_score_trend_polynormial_v1(df, degree=self.polyfit_degree)
 
-        xy = (
-            df[df["health_multiplier"] > 0]
-            .groupby(["window_start"])["health_score"]
-            .max()
-            .add(
-                df[df["health_multiplier"] < 0]
-                .groupby(["window_start"])["health_score"]
-                .min(),
-                fill_value=0,
-            )
-        )
+        should_alert = self.should_alert(trend)
+        if should_alert:
+            loop = asyncio.get_running_loop()
+            loop.warning(f"Sending alert for session={session}")
+            loop.run_until_complete(self.trigger_alert_async())
 
-        trend = np.polynomial.polynomial.Polynomial.fit(
-            xy.index, xy, self.polyfit_degree
-        )
-
+        logger.info(f"should_alert={should_alert} for trend={trend}")
         yield xy, trend
 
 
