@@ -16,7 +16,7 @@ import tarfile
 import numpy as np
 import tensorflow as tf
 import apache_beam as beam
-from typing import List, Tuple, Any, Iterable, Generator
+from typing import List, Tuple, Any, Iterable, Generator, Coroutine
 from apache_beam import window
 from apache_beam.options.pipeline_options import GoogleCloudOptions
 from apache_beam.options.pipeline_options import PipelineOptions
@@ -214,29 +214,36 @@ class CalcHealthScoreTrend(beam.DoFn):
         self.window_size = window_size
         self.window_period = window_period
         self.warmup = warmup
+        self.api_url = api_url
+        self.api_token = api_token
 
     def should_alert(self, trend: np.polynomial.polynomial.Polynomial) -> bool:
         slope, intercept = tuple(trend)
         return slope < 0
 
-    async def trigger_alert_async(
-        self, session: str, telemetry_event: NestedTelemetryEvent
-    ):
+    async def trigger_alert_async(self, session: str):
         rest_client = RestAPIClient(api_token=self.api_token, api_url=self.api_url)
 
         res = await rest_client.create_defect_alert(
-            telemetry_event.device_id,
-            user=telemetry_event.user_id,
             print_session=session,
         )
 
         logger.info(f"create_defect_alert res={res}")
 
+    def trigger_alert(self, session: str):
+        logger.warning(f"Sending alert for session={session}")
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        loop.run_until_complete(self.trigger_alert_async(session))
+
     def process(
         self,
         keyed_elements: Tuple[str, Iterable[WindowedHealthRecord]],
         window=beam.DoFn.WindowParam,
-    ):
+    ) -> Tuple[pd.DataFrame, np.polynomial.polynomial.Polynomial]:
         session, windowed_health_records = keyed_elements
 
         df = (
@@ -257,12 +264,10 @@ class CalcHealthScoreTrend(beam.DoFn):
 
         should_alert = self.should_alert(trend)
         if should_alert:
-            loop = asyncio.get_event_loop()
-            loop.warning(f"Sending alert for session={session}")
-            loop.run_until_complete(self.trigger_alert_async())
+            self.trigger_alert(session)
 
         logger.info(f"should_alert={should_alert} for trend={trend}")
-        yield xy, trend
+        yield trend
 
 
 def predict_bounding_boxes(element, model_path):

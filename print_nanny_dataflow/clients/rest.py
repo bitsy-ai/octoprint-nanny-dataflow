@@ -58,12 +58,10 @@ class RestAPIClient:
         max_time=MAX_BACKOFF_TIME,
         jitter=backoff.random_jitter,
     )
-    async def create_defect_alert(self, octoprint_device_id, **kwargs):
-        async with AsyncApiClient(self._api_config) as api_client:
+    async def create_defect_alert(self, **kwargs):
+        async with print_nanny_client.ApiClient(self._api_config) as api_client:
             api_instance = print_nanny_client.AlertsApi(api_client=api_client)
 
-            request = print_nanny_client.DefectAlertRequest(
-                octoprint_device=octoprint_device_id, **kwargs
-            )
+            request = print_nanny_client.DefectAlertRequest(**kwargs)
             defect_alert = await api_instance.defect_alerts_create(request)
             return defect_alert

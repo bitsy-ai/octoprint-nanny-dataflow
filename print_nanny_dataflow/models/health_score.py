@@ -13,12 +13,10 @@ def health_score_trend_polynormial_v1(
     """
     xy = (
         df[df["health_multiplier"] > 0]
-        .groupby(["window_start"])["health_score"]
+        .groupby(["ts"])["health_score"]
         .max()
         .add(
-            df[df["health_multiplier"] < 0]
-            .groupby(["window_start"])["health_score"]
-            .min(),
+            df[df["health_multiplier"] < 0].groupby(["ts"])["health_score"].min(),
             fill_value=0,
         )
     )
