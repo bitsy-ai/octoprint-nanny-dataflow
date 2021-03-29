@@ -24,5 +24,5 @@ def health_score_trend_polynormial_v1(
     )
 
     logger.info(f"Calculating polyfit with degree={degree} on df: \n {xy}")
-    trend = np.polynomial.polynomial.Polynomial.fit(xy.index, xy, self.polyfit_degree)
+    trend = np.polynomial.polynomial.Polynomial.fit(xy.index, xy, degree)
     return trend
