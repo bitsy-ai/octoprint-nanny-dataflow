@@ -63,5 +63,5 @@ class RestAPIClient:
             api_instance = print_nanny_client.AlertsApi(api_client=api_client)
 
             request = print_nanny_client.DefectAlertRequest(**kwargs)
-            defect_alert = await api_instance.defect_alerts_create(request)
+            defect_alert = await api_instance.defect_alert_create(request)
             return defect_alert
