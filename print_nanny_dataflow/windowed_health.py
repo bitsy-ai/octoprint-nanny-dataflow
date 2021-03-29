@@ -257,7 +257,7 @@ class CalcHealthScoreTrend(beam.DoFn):
 
         should_alert = self.should_alert(trend)
         if should_alert:
-            loop = asyncio.get_running_loop()
+            loop = asyncio.get_event_loop()
             loop.warning(f"Sending alert for session={session}")
             loop.run_until_complete(self.trigger_alert_async())
 
