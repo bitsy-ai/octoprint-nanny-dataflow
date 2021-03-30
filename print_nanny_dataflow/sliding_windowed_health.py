@@ -26,6 +26,7 @@ import PIL
 from tensorflow_transform.beam import impl as beam_impl
 from tensorflow_serving.apis import predict_pb2
 from apache_beam.dataframe.convert import to_dataframe, to_pcollection
+from apache_beam.dataframe.transforms import DataframeTransform
 
 from apache_beam.transforms import trigger
 
@@ -80,9 +81,9 @@ class WriteBatchedTFRecords(beam.DoFn):
 
 
 class WriteBatchedParquet(beam.DoFn):
-    def __init__(self, parquet_base_path: str, schema: pa.Schema, batch_size: int):
+    def __init__(self, parquet_base_path: str, schema):
         self.parquet_base_path = parquet_base_path
-        self.batch_size = batch_size
+        # self.batch_size = batch_size
         self.schema = schema
 
     def process(self, batched_elements):
@@ -212,7 +213,7 @@ class RenderVideoTriggerAlert(beam.DoFn):
     def annotate_image(self, event: NestedTelemetryEvent):
         image_np = np.array(PIL.Image.open(io.BytesIO(event.image_data)))
         if event.calibration is None:
-            return visualize_boxes_and_labels_on_image_array(
+            annotated_image_data = visualize_boxes_and_labels_on_image_array(
                 image_np,
                 event.detection_boxes,
                 event.detection_classes,
@@ -226,7 +227,7 @@ class RenderVideoTriggerAlert(beam.DoFn):
         else:
             detection_boundary_mask = self.calibration["mask"]
             ignored_mask = np.invert(detection_boundary_mask)
-            return visualize_boxes_and_labels_on_image_array(
+            annotated_image_data = visualize_boxes_and_labels_on_image_array(
                 image_np,
                 event.detection_boxes,
                 event.detection_classes,
@@ -239,8 +240,16 @@ class RenderVideoTriggerAlert(beam.DoFn):
                 detection_boundary_mask=detection_boundary_mask,
                 detection_box_ignored=ignored_mask,
             )
+        return event.session, NestedTelemetryEvent(
+            annotated_image_data=annotated_image_data, **event.to_dict()
+        )
 
-    def write_video(self, df: pd.DataFrame, session: str) -> str:
+    def write_video(
+        self, keyed_elements: Tuple[str, Iterable[NestedTelemetryEvent]]
+    ) -> str:
+        import pdb
+
+        pdb.set_trace()
         min_ts = df["ts"].min()
         max_ts = df["ts"].max()
         output_path = os.path.join(
@@ -253,35 +262,42 @@ class RenderVideoTriggerAlert(beam.DoFn):
             for i, value in df["annotated_image"].iteritems():
                 writer.append_data(value)
             writer.close()
+        yield output_path
 
     def process(self, session: str):
 
         base_path = os.path.join(self.parquet_sink, session)
         gcs_client = beam.io.gcp.gcsio.GcsIO()
         batched_records = list(gcs_client.list_prefix(base_path).keys())
+        import pdb
+
+        pdb.set_trace()
         if len(batched_records) > self.max_batches:
             # get most recent windows from selection
             batched_records = batched_records[-self.max_batches :]
 
-        # convert pcollection to Beam DataFrame API/DSL: https://beam.apache.org/blog/dataframe-api-preview-available/
-        df = to_dataframe(
+        # convert pcollection to Beam DataFrame API/DSL for sort operation: https://beam.apache.org/blog/dataframe-api-preview-available/
+        # pcollections are an unordered set
+        yield (
             beam.Create(batched_records)
             | f"Read last {self.max_batches} batched records"
             >> beam.io.parquetio.ReadAllFromParquet().with_output_types(
                 NestedTelemetryEvent
             )
-            | f"Filter area of interest and detections above threshold"
+            | "Filter area of interest and detections above threshold"
             >> beam.ParDo(
                 FilterDetections(
                     args.calibration_base_path,
                     score_threshold=self.score_threshold,
                     output_calibration=True,
                 )
-            )
+            ).with_output_types(NestedTelemetryEvent)
+            | "Transform to DataFrame"
+            >> DataframeTransform(lambda df: df.sort_values("ts", inplace=True))
+            | "Add annotated image keyed by session"
+            >> beam.Map(self.annotate_image).with_output_types(NestedTelemetryEvent)
+            | "Render and write video" >> beam.CombineValues(self.write_video)
         )
-        df.sort_values("ts", inplace=True)
-        df["annotated_image"] = df.apply(self.annotate_image)
-        yield df.agg(lambda x: self.write_video(x, session))
 
 
 class AsWindowedHealthRecord(beam.DoFn):
@@ -515,7 +531,8 @@ def run_pipeline(args, pipeline_args):
                 >> beam.Map(lambda x: (x.session, x))
             )
             tf_feature_spec = NestedTelemetryEvent.tf_feature_spec(args.num_detections)
-            metadata = NestedTelemetryEvent.tfrecord_metadata(tf_feature_spec)
+            tf_record_schema = NestedTelemetryEvent.tfrecord_metadata(tf_feature_spec)
+            pa_schema = NestedTelemetryEvent.pyarrow_schema(args.num_detections)
 
             batched_records = (
                 parsed_dataset_by_session
@@ -524,15 +541,11 @@ def run_pipeline(args, pipeline_args):
             )
 
             tfrecord_sink_pipeline = batched_records | "Write TFRecords" >> beam.ParDo(
-                WriteBatchedTFRecords(args.tfrecord_sink, metadata.schema)
+                WriteBatchedTFRecords(args.tfrecord_sink, tf_record_schema)
             )
 
-            parquet_sink_pipeline = batched_records | "Write Parquet" >> beam.Map(
-                lambda x: write_batched_parquet(
-                    x,
-                    args.parquet_sink,
-                    NestedTelemetryEvent.pyarrow_schema(args.num_detections),
-                )
+            parquet_sink_pipeline = batched_records | "Write Parquet" >> beam.ParDo(
+                WriteBatchedParquet(args.parquet_sink, pa_schema)
             )
 
             should_alert_per_session_windowed = (
@@ -578,9 +591,6 @@ def run_pipeline(args, pipeline_args):
                         health_threshold=3,
                     )
                 )
-            )
-            render_video = (
-                should_alert_per_session_windowed
                 | "Render video and trigger alert"
                 >> beam.ParDo(
                     RenderVideoTriggerAlert(
@@ -656,7 +666,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--health-window-period",
-        default=30,
+        default=60,
         help="Size of sliding event window slices (in seconds)",
     )
 

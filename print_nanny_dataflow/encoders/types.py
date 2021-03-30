@@ -146,9 +146,10 @@ class NestedTelemetryEvent(NamedTuple):
     # Image
     image_width: npt.Float32
     image_height: npt.Float32
-    image_data: tf.Tensor = None
+    image_data: bytes = None
     image_tensor: tf.Tensor = None
     calibration: DeviceCalibration = None
+    annotated_image_data: bytes = None
 
     @staticmethod
     def pyarrow_schema(num_detections):
