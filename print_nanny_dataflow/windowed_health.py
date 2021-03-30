@@ -336,21 +336,20 @@ class CalcHealthScoreTrend(beam.DoFn):
         self.api_url = api_url
         self.api_token = api_token
 
-    async def should_alert_async(
-        self, trend: np.polynomial.polynomial.Polynomial
+    async def should_alert_async(self, session: str) -> bool:
+        rest_client = RestAPIClient(api_token=self.api_token, api_url=self.api_url)
+
+        print_session = await rest_client.get_print_session(
+            print_session=session,
+        )
+        return print_session.supress_alerts is False
+
+    def should_alert(
+        self, session: str, trend: np.polynomial.polynomial.Polynomial
     ) -> bool:
         slope, intercept = tuple(trend)
         if slope < 0:
-            rest_client = RestAPIClient(api_token=self.api_token, api_url=self.api_url)
-
-            print_session = await rest_client.get_print_session(
-                print_session=session,
-            )
-            return print_session.supress_alerts
-
-    def should_alert(self, trend: np.polynomial.polynomial.Polynomial) -> bool:
-        slope, intercept = tuple(trend)
-        if slope < 0:
+            # @todo investigate event loop policy used by beam python SDK (if any) https://docs.python.org/3/library/asyncio-policy.html
             try:
                 loop = asyncio.get_event_loop()
             except RuntimeError:
@@ -381,7 +380,7 @@ class CalcHealthScoreTrend(beam.DoFn):
 
         trend = health_score_trend_polynormial_v1(df, degree=self.polyfit_degree)
 
-        should_alert = self.should_alert(trend)
+        should_alert = self.should_alert(session, trend)
         logger.info(f"should_alert={should_alert} for trend={trend}")
         if should_alert:
             yield session
