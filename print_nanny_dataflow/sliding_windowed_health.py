@@ -18,7 +18,7 @@ import tempfile
 import numpy as np
 import tensorflow as tf
 import apache_beam as beam
-from typing import List, Tuple, Any, Iterable, Generator, Coroutine
+from typing import List, Tuple, Any, Iterable, Generator, Coroutine, Optional
 from apache_beam import window
 from apache_beam.options.pipeline_options import GoogleCloudOptions
 from apache_beam.options.pipeline_options import PipelineOptions
@@ -288,6 +288,7 @@ class RenderVideoTriggerAlert(beam.DoFn):
         yield (
             elements
             | "Filter area of interest and detections above threshold"
+            | "Group by session" >> beam.GroupBy("session")
             >> beam.ParDo(
                 FilterAreaOfInterest(
                     self.calibration_base_path,
@@ -306,17 +307,17 @@ class RenderVideoTriggerAlert(beam.DoFn):
 class AsWindowedHealthRecord(beam.DoFn):
     def process(
         self,
-        keyed_element: Tuple[str, NestedTelemetryEvent],
+        keyed_element: Tuple[str, Iterable[NestedTelemetryEvent]],
         window=beam.DoFn.WindowParam,
-    ) -> Iterable[WindowedHealthRecord]:
-        session, event = keyed_element
+    ) -> Tuple[str, Iterable[WindowedHealthRecord]]:
+        session, elements = keyed_element
         window_start = int(window.start)
         window_end = int(window.end)
 
         # save frame for later rendering
-
-        return (
-            WindowedHealthRecord(
+        yield tuple(
+            session,
+            elements | beam.Map(lambda event: (WindowedHealthRecord(
                 ts=event.ts,
                 session=event.session,
                 client_version=event.client_version,
@@ -330,8 +331,8 @@ class AsWindowedHealthRecord(beam.DoFn):
                 health_multiplier=HEALTH_WEIGHTS[event.detection_classes[i]],
                 health_score=HEALTH_WEIGHTS[event.detection_classes[i]],
             )
-            for i in range(0, event.num_detections)
-        )
+            for i in range(0, event.num_detections))
+        ))
 
 
 def absolute_log(df, log_fn=np.log2):
@@ -454,25 +455,17 @@ class FilterAreaOfInterest(beam.DoFn):
         calibration_base_path: str,
         score_threshold: float = 0.5,
         calibration_filename: str = "calibration.json",
-        output_calibration=False,
     ):
         self.calibration_base_path = calibration_base_path
         self.score_threshold = score_threshold
         self.calibration_filename = calibration_filename
-        self.output_calibration = output_calibration
 
-    def process(
-        self, keyed_element: Tuple[str, NestedTelemetryEvent]
-    ) -> Iterable[Tuple[str, NestedTelemetryEvent]]:
-        session, event = keyed_element
+    def load_calibration(self, event: NestedTelemetryEvent) -> Optional[DeviceCalibration]:
         gcs_client = beam.io.gcp.gcsio.GcsIO()
-
         device_id = event.device_id
         device_calibration_path = os.path.join(
             self.calibration_base_path, str(device_id), self.calibration_filename
         )
-
-        calibration_json = None
         if gcs_client.exists(device_calibration_path):
             with gcs_client.open(device_calibration_path, "r") as f:
                 logger.info(
@@ -480,15 +473,19 @@ class FilterAreaOfInterest(beam.DoFn):
                 )
                 calibration_json = json.load(f)
 
-            coordinates = calibration_json["coordinates"]
-            event = NestedTelemetryEvent.calibration_filter(event, coordinates)
+            return DeviceCalibration(**calibration_json)
 
-        if calibration_json:
-            calibration = DeviceCalibration(**calibration_json)
-        else:
-            calibration = None
-        yield session, NestedTelemetryEvent(calibration=calibration ** event.to_dict())
+    def process(
+        self, keyed_element: Tuple[str, Iterable[NestedTelemetryEvent]]
+    ) -> Tuple[str, Iterable[NestedTelemetryEvent]]:
+        session, elements = keyed_element
 
+        calibration = self.load_calibration(elements[0])
+
+        if calibration:
+            yield session, elements | beam.Map(lambda event: calibration.filter_event(event))
+        else:    
+            yield session, elements
 
 def run_pipeline(args, pipeline_args):
     logging.basicConfig(level=getattr(logging, args.loglevel))
@@ -567,6 +564,7 @@ def run_pipeline(args, pipeline_args):
 
             sliding_window_view = (
                 parsed_dataset_by_session
+                | "Group windowed NestedTelemeryEvent by session" >> beam.GroupByKey()
                 | "Add sliding window"
                 >> beam.WindowInto(
                     beam.transforms.window.SlidingWindows(
@@ -582,10 +580,9 @@ def run_pipeline(args, pipeline_args):
                     FilterAreaOfInterest(
                         args.calibration_base_path, score_threshold=0.5
                     )
-                )
+                ).with_output_types(Tuple[str, Iterable[NestedTelemetryEvent]])
                 | "Flatten remaining observations in NestedTelemetryEvent"
-                >> beam.ParDo(AsWindowedHealthRecord())
-                | "Group WindowedHealthRecord by key" >> beam.GroupBy("session")
+                >> beam.ParDo(AsWindowedHealthRecord()).with_output_types(Tuple[str, Iterable[WindowedHealthRecord]])
                 # | "Write health checkpoint"
                 # >> beam.ParDo(
                 #     WriteHealthCheckpoint(

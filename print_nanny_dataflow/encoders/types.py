@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import Tuple, Dict, Any, NamedTuple
 import pandas as pd
 import numpy as np
@@ -98,7 +100,42 @@ class DeviceCalibration(NamedTuple):
     mask = npt.NDArray[npt.Bool]
     fpm = int
 
+    def filter_event(self, event: 'NestedTelemetryEvent', min_overlap_area: float = 0.75):
+        percent_intersection = self.percent_intersection(self.coordinates)
+        ignored_mask = percent_intersection <= min_overlap_area
 
+        detection_boxes = self.detection_boxes()
+        included_mask = np.invert(ignored_mask)
+        detection_boxes = np.squeeze(detection_boxes[included_mask])
+        detection_scores = np.squeeze(self.detection_scores[included_mask])
+        detection_classes = np.squeeze(self.detection_classes[included_mask])
+
+        num_detections = int(np.count_nonzero(included_mask))
+
+        filter_fields = [
+            "detection_scores",
+            "detection_classes",
+            "boxes_ymin",
+            "boxes_xmin",
+            "boxes_ymax",
+            "boxes_xmax",
+            "num_detections",
+        ]
+        default_fieldset = {
+            k: v for k, v in self.to_dict().items() if k not in filter_fields
+        }
+        boxes_ymin, boxes_xmin, boxes_ymax, boxes_xmax = detection_boxes.T
+        return self.__class__(
+            detection_scores=detection_scores,
+            detection_classes=detection_classes,
+            num_detections=num_detections,
+            boxes_ymin=boxes_ymin,
+            boxes_xmin=boxes_xmin,
+            boxes_ymax=boxes_ymax,
+            boxes_xmax=boxes_xmax,
+            calbiration=self,
+            **default_fieldset
+        )
 class NestedTelemetryEvent(NamedTuple):
     """
     1 NestedTelemetryEvent : 1 Monitoring Frame
@@ -339,39 +376,3 @@ class NestedTelemetryEvent(NamedTuple):
             [self.boxes_ymin, self.boxes_xmin, self.boxes_ymax, self.boxes_xmax]
         ).T
 
-    def calibration_filter(self, aoi_coords, min_overlap_area: float = 0.75):
-
-        percent_intersection = self.percent_intersection(aoi_coords)
-        ignored_mask = percent_intersection <= min_overlap_area
-
-        detection_boxes = self.detection_boxes()
-        included_mask = np.invert(ignored_mask)
-        detection_boxes = np.squeeze(detection_boxes[included_mask])
-        detection_scores = np.squeeze(self.detection_scores[included_mask])
-        detection_classes = np.squeeze(self.detection_classes[included_mask])
-
-        num_detections = int(np.count_nonzero(included_mask))
-
-        filter_fields = [
-            "detection_scores",
-            "detection_classes",
-            "boxes_ymin",
-            "boxes_xmin",
-            "boxes_ymax",
-            "boxes_xmax",
-            "num_detections",
-        ]
-        default_fieldset = {
-            k: v for k, v in self.to_dict().items() if k not in filter_fields
-        }
-        boxes_ymin, boxes_xmin, boxes_ymax, boxes_xmax = detection_boxes.T
-        return self.__class__(
-            detection_scores=detection_scores,
-            detection_classes=detection_classes,
-            num_detections=num_detections,
-            boxes_ymin=boxes_ymin,
-            boxes_xmin=boxes_xmin,
-            boxes_ymax=boxes_ymax,
-            boxes_xmax=boxes_xmax,
-            **default_fieldset
-        )
