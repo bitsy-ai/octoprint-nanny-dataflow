@@ -24,7 +24,7 @@ clean-pyc: ## remove Python file artifacts
 clean: clean-dist clean-pyc clean-build
 
 local-dev:
-	$(PYTHON) print_nanny_dataflow/windowed_health.py \
+	$(PYTHON) print_nanny_dataflow/sliding_windowed_health.py \
 	--runner DirectRunner \
 	--loglevel INFO \
 	--api-url="http://localhost:8000/api" \

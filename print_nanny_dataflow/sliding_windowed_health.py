@@ -80,34 +80,28 @@ class WriteBatchedTFRecords(beam.DoFn):
         )
 
 
-class WriteBatchedParquet(beam.DoFn):
+class WriteWindowedParquet(beam.DoFn):
     def __init__(self, parquet_base_path: str, schema):
         self.parquet_base_path = parquet_base_path
-        # self.batch_size = batch_size
         self.schema = schema
 
-    def process(self, batched_elements):
+    def process(self, keyed_elements: Tuple[str, Iterable[NestedTelemetryEvent]], window=beam.DoFn.WindowParam):
 
-        session, elements = batched_elements
+        session, elements = keyed_elements
+
+
+        window_start = int(window.start)
+        window_end = int(window.end)
+
         output_path = os.path.join(
-            self.parquet_base_path, session, str(int(datetime.now().timestamp()))
+            self.parquet_base_path, session, f"{window_start}_{window_end}.parquet"
         )
 
         yield (
-            e.to_dict()
-            for e in elements
+            elements
             | beam.io.parquetio.WriteToParquet(output_path, self.schema)
         )
 
-
-def write_batched_parquet(batched_elements, parquet_base_path, schema):
-    session, elements = batched_elements
-    output_path = os.path.join(
-        parquet_base_path, session, str(int(datetime.now().timestamp()))
-    )
-
-    elements = beam.Create([e.to_dict() for e in elements])
-    return elements | beam.io.parquetio.WriteToParquet(output_path, schema)
 
 
 async def download_active_experiment_model(tmp_dir=".tmp/", model_artifact_id=1):
@@ -176,6 +170,7 @@ class RenderVideoTriggerAlert(beam.DoFn):
         self,
         parquet_sink,
         video_upload_path,
+        calibration_base_path,
         api_url,
         api_token,
         max_batches=3,
@@ -191,6 +186,7 @@ class RenderVideoTriggerAlert(beam.DoFn):
         self.score_threshold = score_threshold
         self.max_boxes_to_draw = max_boxes_to_draw
         self.video_upload_path = video_upload_path
+        self.calibration_base_path = calibration_base_path
 
     async def trigger_alert_async(self, session: str):
         rest_client = RestAPIClient(api_token=self.api_token, api_url=self.api_url)
@@ -245,15 +241,11 @@ class RenderVideoTriggerAlert(beam.DoFn):
         )
 
     def write_video(
-        self, keyed_elements: Tuple[str, Iterable[NestedTelemetryEvent]]
+        self, keyed_elements: Tuple[str, Iterable[NestedTelemetryEvent]], window_start: int, window_end: int
     ) -> str:
-        import pdb
 
-        pdb.set_trace()
-        min_ts = df["ts"].min()
-        max_ts = df["ts"].max()
         output_path = os.path.join(
-            self.video_upload_path, session, f"{min_ts}_{max_ts}.mp4"
+            self.video_upload_path, session, f"{window_start}_{window_end}.mp4"
         )
         gcs_client = beam.io.gcp.gcsio.GcsIO()
 
@@ -264,14 +256,15 @@ class RenderVideoTriggerAlert(beam.DoFn):
             writer.close()
         yield output_path
 
-    def process(self, session: str):
-
-        base_path = os.path.join(self.parquet_sink, session)
+    def process(self, session: str, window=beam.DoFn.WindowParam):
+        window_start = int(window.start)
+        window_end = int(window.end)
+        input_path = os.path.join(
+            self.parquet_sink, session,
+            f"{window_start}_{window_end}.parquet",
+        )
         gcs_client = beam.io.gcp.gcsio.GcsIO()
-        batched_records = list(gcs_client.list_prefix(base_path).keys())
-        import pdb
-
-        pdb.set_trace()
+        batched_records = list(gcs_client.list_prefix(input_path).keys())
         if len(batched_records) > self.max_batches:
             # get most recent windows from selection
             batched_records = batched_records[-self.max_batches :]
@@ -287,7 +280,7 @@ class RenderVideoTriggerAlert(beam.DoFn):
             | "Filter area of interest and detections above threshold"
             >> beam.ParDo(
                 FilterDetections(
-                    args.calibration_base_path,
+                    self.calibration_base_path,
                     score_threshold=self.score_threshold,
                     output_calibration=True,
                 )
@@ -301,11 +294,12 @@ class RenderVideoTriggerAlert(beam.DoFn):
 
 
 class AsWindowedHealthRecord(beam.DoFn):
-    def process(self, event: NestedTelemetryEvent, window=beam.DoFn.WindowParam):
+    def process(self, keyed_elements: Tuple[str, Iterable[NestedTelemetryEvent]], window=beam.DoFn.WindowParam) -> Iterable[Tuple[str, Iterable[WindowedHealthRecord]]]:
+        session, elements = keyed_elements
         window_start = int(window.start)
         window_end = int(window.end)
-        return [
-            WindowedHealthRecord(
+        yield session, (
+            elements | beam.FlatMap(lambda: WindowedHealthRecord(
                 ts=event.ts,
                 session=event.session,
                 client_version=event.client_version,
@@ -320,8 +314,8 @@ class AsWindowedHealthRecord(beam.DoFn):
                 health_score=HEALTH_WEIGHTS[event.detection_classes[i]]
                 * event.detection_scores[i],
             )
-            for i in range(0, event.num_detections)
-        ]
+            for i in range(0, event.num_detections))
+        )
 
 
 def absolute_log(df, log_fn=np.log2):
@@ -436,8 +430,7 @@ def predict_bounding_boxes(element, model_path):
     defaults.update(params)
     return NestedTelemetryEvent(**defaults)
 
-
-class FilterDetections(beam.DoFn):
+class FilterDetectionsBase(beam.DoFn):
     def __init__(
         self,
         calibration_base_path: str,
@@ -451,7 +444,7 @@ class FilterDetections(beam.DoFn):
         self.calibration_filename = calibration_filename
         self.output_calibration = output_calibration
 
-    def process(self, event: NestedTelemetryEvent) -> Iterable[NestedTelemetryEvent]:
+    def process_element(self, event: NestedTelemetryEvent) -> Iterable[NestedTelemetryEvent]:
         gcs_client = beam.io.gcp.gcsio.GcsIO()
 
         device_id = event.device_id
@@ -480,7 +473,30 @@ class FilterDetections(beam.DoFn):
                 yield NestedTelemetryEvent(calibration=calibration ** event.to_dict())
             else:
                 yield event
+    def process(self):
+        raise NotImplemented  
 
+class FilterKeyedDetections(FilterDetectionsBase):
+    def __init__(
+        self,
+        calibration_base_path: str,
+        score_threshold: float = 0.5,
+        calibration_filename: str = "calibration.json",
+        output_calibration=False,
+    ):
+        self.score_threshold = 0.5
+        self.calibration_base_path = calibration_base_path
+        self.score_threshold = score_threshold
+        self.calibration_filename = calibration_filename
+        self.output_calibration = output_calibration
+
+    def process(self, keyed_elements: Tuple[str, Iterable[NestedTelemetryEvent]]) -> Tuple[str, Iterable[NestedTelemetryEvent]]:
+        session, elements = keyed_elements
+        yield elements | beam.Map(lambda x: (session, self.process_element(x)))
+
+class FilterDetections(FilterDetectionsBase):
+    def process(self, element: NestedTelemetryEvent):
+        yield self.process_element(element)
 
 def run_pipeline(args, pipeline_args):
     logging.basicConfig(level=getattr(logging, args.loglevel))
@@ -528,7 +544,7 @@ def run_pipeline(args, pipeline_args):
             parsed_dataset_by_session = (
                 parsed_dataset
                 | "Key NestedTelemetryEvent by session id"
-                >> beam.Map(lambda x: (x.session, x))
+                >> beam.Map(lambda x: (x.session, x)).with_output_types(Tuple[str, NestedTelemetryEvent])
             )
             tf_feature_spec = NestedTelemetryEvent.tf_feature_spec(args.num_detections)
             tf_record_schema = NestedTelemetryEvent.tfrecord_metadata(tf_feature_spec)
@@ -544,30 +560,36 @@ def run_pipeline(args, pipeline_args):
                 WriteBatchedTFRecords(args.tfrecord_sink, tf_record_schema)
             )
 
-            parquet_sink_pipeline = batched_records | "Write Parquet" >> beam.ParDo(
-                WriteBatchedParquet(args.parquet_sink, pa_schema)
-            )
-
-            should_alert_per_session_windowed = (
-                parsed_dataset
-                | "Drop detections below confidence threshold & outside of calibration area of interest"
-                >> beam.ParDo(
-                    FilterDetections(args.calibration_base_path, score_threshold=0.5)
-                )
+            windowed_view =  (
+                parsed_dataset_by_session
+                | "Group by key" >> beam.GroupByKey()          
                 | "Add sliding window"
                 >> beam.WindowInto(
                     beam.transforms.window.SlidingWindows(
                         args.health_window_size, args.health_window_period
-                    ),
+                    )
                 )
+            )
+
+            parquet_sink_pipeline = (
+                windowed_view | "Write Parquet" >> beam.ParDo(
+                WriteWindowedParquet(args.parquet_sink, pa_schema))
+            )
+
+            should_alert_per_session_windowed = (
+                windowed_view
+                | "Drop detections below confidence threshold & outside of calibration area of interest"
+                >> beam.ParDo(
+                    FilterKeyedDetections(args.calibration_base_path, score_threshold=0.5)
+                ).with_output_types(Tuple[str, Iterable[NestedTelemetryEvent]])
                 | "Flatten remaining observations in NestedTelemetryEvent"
                 >> beam.ParDo(AsWindowedHealthRecord()).with_output_types(
-                    WindowedHealthRecord
+                    Tuple[str, Iterable[WindowedHealthRecord]]
                 )
                 # | DataframeTransform(lambda df: df.groupby(['session', 'window_start', 'window_end']).sum())
-                | "Key WindowedHealthRecord by session"
-                >> beam.Map(lambda e: (e.session, e))
-                | "Group by key" >> beam.GroupByKey()
+                # | "Key WindowedHealthRecord by session"
+                # >> beam.Map(lambda e: (e.session, e))
+                # | "Group by key" >> beam.GroupByKey()
                 | "Write health checkpoint"
                 >> beam.ParDo(
                     WriteHealthCheckpoint(
@@ -596,6 +618,7 @@ def run_pipeline(args, pipeline_args):
                     RenderVideoTriggerAlert(
                         args.parquet_sink,
                         args.video_upload_path,
+                        args.calibration_base_path,
                         api_url=args.api_url,
                         api_token=args.api_token,
                     )
@@ -637,7 +660,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--parquet-sink",
-        default="gs://print-nanny-sandbox/dataflow/telemetry_event/parquet/batched",
+        default="gs://print-nanny-sandbox/dataflow/telemetry_event/parquet/windowed",
         help="Files will be output to this gcs bucket",
     )
 
