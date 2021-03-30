@@ -112,6 +112,12 @@ class WindowedHealthRecord(NamedTuple):
         return df.set_index(["ts", "detection_class"])
 
 
+class DeviceCalibration(NamedTuple):
+    coordinates: npt.NDArray[npt.Float32]
+    mask = npt.NDArray[npt.Bool]
+    fpm = int
+
+
 class NestedTelemetryEvent(NamedTuple):
     """
     1 NestedTelemetryEvent : 1 Monitoring Frame
@@ -142,6 +148,7 @@ class NestedTelemetryEvent(NamedTuple):
     image_height: npt.Float32
     image_data: tf.Tensor = None
     image_tensor: tf.Tensor = None
+    calibration: DeviceCalibration = None
 
     @staticmethod
     def pyarrow_schema(num_detections):

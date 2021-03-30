@@ -13,6 +13,8 @@ import json
 import logging
 import asyncio
 import tarfile
+import tempfile
+
 import numpy as np
 import tensorflow as tf
 import apache_beam as beam
@@ -23,24 +25,30 @@ from apache_beam.options.pipeline_options import PipelineOptions
 import PIL
 from tensorflow_transform.beam import impl as beam_impl
 from tensorflow_serving.apis import predict_pb2
-from apache_beam.dataframe.convert import to_dataframe
-from apache_beam.dataframe.transforms import DataframeTransform
+from apache_beam.dataframe.convert import to_dataframe, to_pcollection
+
 from apache_beam.transforms import trigger
 
 from encoders.tfrecord_example import ExampleProtoEncoder
-from encoders.types import NestedTelemetryEvent, WindowedHealthRecord
+from encoders.types import NestedTelemetryEvent, WindowedHealthRecord, DeviceCalibration
 from models.health_score import health_score_trend_polynormial_v1
+from utils.visualization import (
+    visualize_boxes_and_labels_on_image_array,
+)
 from clients.rest import RestAPIClient
 import pyarrow as pa
+import PIL
 
 logger = logging.getLogger(__name__)
 
-DETECTION_LABELS = {
-    1: "nozzle",
-    2: "adhesion",
-    3: "spaghetti",
-    4: "print",
-    5: "raft",
+# @todo load from labels dict
+CATEGORY_INDEX = {
+    0: {"name": "background", "id": 0},
+    1: {"name": "nozzle", "id": 1},
+    2: {"name": "adhesion", "id": 2},
+    3: {"name": "spaghetti", "id": 3},
+    4: {"name": "print", "id": 4},
+    5: {"name": "raftt", "id": 5},
 }
 
 HEALTH_WEIGHTS = {1: 0, 2: -0.5, 3: -0.5, 4: 1, 5: 0}
@@ -141,9 +149,6 @@ class WriteHealthCheckpoint(beam.DoFn):
         session, health_records = keyed_elements
 
         base_path = os.path.join(self.checkpoint_sink, session)
-        pq_glob_path = os.path.join(
-            base_path,
-        )
 
         window_start = int(window.start)
         window_end = int(window.end)
@@ -157,12 +162,126 @@ class WriteHealthCheckpoint(beam.DoFn):
 
         gcs_client = beam.io.gcp.gcsio.GcsIO()
 
-        past_checkpoints = list(gcs_client.list_prefix(pq_glob_path).keys())
+        past_checkpoints = list(gcs_client.list_prefix(base_path).keys())
         if len(past_checkpoints) > self.window_lookback:
             # get most recent windows from selection
             past_checkpoints = past_checkpoints[-self.window_lookback :]
 
         return past_checkpoints
+
+
+class RenderVideoTriggerAlert(beam.DoFn):
+    def __init__(
+        self,
+        parquet_sink,
+        video_upload_path,
+        api_url,
+        api_token,
+        max_batches=3,
+        category_index=CATEGORY_INDEX,
+        score_threshold=0.5,
+        max_boxes_to_draw=10,
+    ):
+        self.parquet_sink = parquet_sink
+        self.max_batches = max_batches
+        self.api_url = api_url
+        self.api_token = api_token
+        self.category_index = category_index
+        self.score_threshold = score_threshold
+        self.max_boxes_to_draw = max_boxes_to_draw
+        self.video_upload_path = video_upload_path
+
+    async def trigger_alert_async(self, session: str):
+        rest_client = RestAPIClient(api_token=self.api_token, api_url=self.api_url)
+
+        res = await rest_client.create_defect_alert(
+            print_session=session,
+        )
+
+        logger.info(f"create_defect_alert res={res}")
+
+    def trigger_alert(self, session: str):
+        logger.warning(f"Sending alert for session={session}")
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        loop.run_until_complete(self.trigger_alert_async(session))
+
+    def annotate_image(self, event: NestedTelemetryEvent):
+        image_np = np.array(PIL.Image.open(io.BytesIO(event.image_data)))
+        if event.calibration is None:
+            return visualize_boxes_and_labels_on_image_array(
+                image_np,
+                event.detection_boxes,
+                event.detection_classes,
+                event.detection_scores,
+                self.category_index,
+                use_normalized_coordinates=True,
+                line_thickness=4,
+                min_score_thresh=self.score_threshold,
+                max_boxes_to_draw=self.max_boxes_to_draw,
+            )
+        else:
+            detection_boundary_mask = self.calibration["mask"]
+            ignored_mask = np.invert(detection_boundary_mask)
+            return visualize_boxes_and_labels_on_image_array(
+                image_np,
+                event.detection_boxes,
+                event.detection_classes,
+                event.detection_scores,
+                self.category_index,
+                use_normalized_coordinates=True,
+                line_thickness=4,
+                min_score_thresh=self.score_threshold,
+                max_boxes_to_draw=self.max_boxes_to_draw,
+                detection_boundary_mask=detection_boundary_mask,
+                detection_box_ignored=ignored_mask,
+            )
+
+    def write_video(self, df: pd.DataFrame, session: str) -> str:
+        min_ts = df["ts"].min()
+        max_ts = df["ts"].max()
+        output_path = os.path.join(
+            self.video_upload_path, session, f"{min_ts}_{max_ts}.mp4"
+        )
+        gcs_client = beam.io.gcp.gcsio.GcsIO()
+
+        with gcs_client.open(output_path, "wb+") as f:
+            writer = imageio.get_writer(f, mode="I")
+            for i, value in df["annotated_image"].iteritems():
+                writer.append_data(value)
+            writer.close()
+
+    def process(self, session: str):
+
+        base_path = os.path.join(self.parquet_sink, session)
+        gcs_client = beam.io.gcp.gcsio.GcsIO()
+        batched_records = list(gcs_client.list_prefix(base_path).keys())
+        if len(batched_records) > self.max_batches:
+            # get most recent windows from selection
+            batched_records = batched_records[-self.max_batches :]
+
+        # convert pcollection to Beam DataFrame API/DSL: https://beam.apache.org/blog/dataframe-api-preview-available/
+        df = to_dataframe(
+            batched_records
+            | f"Read last {max_batches} batched records"
+            >> beam.io.parquetio.ReadAllFromParquet().with_output_types(
+                NestedTelemetryEvent
+            )
+            | f"Filter area of interest and detections above threshold"
+            >> beam.ParDo(
+                FilterDetections(
+                    args.calibration_base_path,
+                    score_threshold=self.score_threshold,
+                    output_calibration=True,
+                )
+            )
+        )
+        df.sort_values("ts", inplace=True)
+        df["annotated_image"] = df.apply(self.annotate_image)
+        yield df.agg(lambda x: self.write_video(x, session))
 
 
 class AsWindowedHealthRecord(beam.DoFn):
@@ -217,33 +336,33 @@ class CalcHealthScoreTrend(beam.DoFn):
         self.api_url = api_url
         self.api_token = api_token
 
+    async def should_alert_async(
+        self, trend: np.polynomial.polynomial.Polynomial
+    ) -> bool:
+        slope, intercept = tuple(trend)
+        if slope < 0:
+            rest_client = RestAPIClient(api_token=self.api_token, api_url=self.api_url)
+
+            print_session = await rest_client.get_print_session(
+                print_session=session,
+            )
+            return print_session.supress_alerts
+
     def should_alert(self, trend: np.polynomial.polynomial.Polynomial) -> bool:
         slope, intercept = tuple(trend)
-        return slope < 0
-
-    async def trigger_alert_async(self, session: str):
-        rest_client = RestAPIClient(api_token=self.api_token, api_url=self.api_url)
-
-        res = await rest_client.create_defect_alert(
-            print_session=session,
-        )
-
-        logger.info(f"create_defect_alert res={res}")
-
-    def trigger_alert(self, session: str):
-        logger.warning(f"Sending alert for session={session}")
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        loop.run_until_complete(self.trigger_alert_async(session))
+        if slope < 0:
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            return loop.run_until_complete(self.should_alert_async(session))
 
     def process(
         self,
         keyed_elements: Tuple[str, Iterable[WindowedHealthRecord]],
         window=beam.DoFn.WindowParam,
-    ) -> Tuple[pd.DataFrame, np.polynomial.polynomial.Polynomial]:
+    ) -> Iterable[str]:
         session, windowed_health_records = keyed_elements
 
         df = (
@@ -263,11 +382,9 @@ class CalcHealthScoreTrend(beam.DoFn):
         trend = health_score_trend_polynormial_v1(df, degree=self.polyfit_degree)
 
         should_alert = self.should_alert(trend)
-        if should_alert:
-            self.trigger_alert(session)
-
         logger.info(f"should_alert={should_alert} for trend={trend}")
-        yield trend
+        if should_alert:
+            yield session
 
 
 def predict_bounding_boxes(element, model_path):
@@ -311,11 +428,13 @@ class FilterDetections(beam.DoFn):
         calibration_base_path: str,
         score_threshold: float = 0.5,
         calibration_filename: str = "calibration.json",
+        output_calibration=False,
     ):
         self.score_threshold = 0.5
         self.calibration_base_path = calibration_base_path
         self.score_threshold = score_threshold
         self.calibration_filename = calibration_filename
+        self.output_calibration = output_calibration
 
     def process(self, event: NestedTelemetryEvent) -> Iterable[NestedTelemetryEvent]:
         gcs_client = beam.io.gcp.gcsio.GcsIO()
@@ -327,6 +446,7 @@ class FilterDetections(beam.DoFn):
 
         event = event.min_score_filter(score_threshold=self.score_threshold)
 
+        calibration_json = None
         if gcs_client.exists(device_calibration_path):
             with gcs_client.open(device_calibration_path, "r") as f:
                 logger.info(
@@ -336,9 +456,15 @@ class FilterDetections(beam.DoFn):
 
             coordinates = calibration_json["coordinates"]
             event = NestedTelemetryEvent.calibration_filter(event, coordinates)
-
         if event.num_detections >= 1:
-            yield event
+            if self.output_calibration is True:
+                if calibration_json:
+                    calibration = DeviceCalibration(**calibration_json)
+                else:
+                    calibration = None
+                yield NestedTelemetryEvent(calibration=calibration ** event.to_dict())
+            else:
+                yield event
 
 
 def run_pipeline(args, pipeline_args):
@@ -392,45 +518,25 @@ def run_pipeline(args, pipeline_args):
             tf_feature_spec = NestedTelemetryEvent.tf_feature_spec(args.num_detections)
             metadata = NestedTelemetryEvent.tfrecord_metadata(tf_feature_spec)
 
-            # box_annotations = (
-            #     parsed_dataset
-            #     | "Add Bounding Box Annotations"
-            #     >> beam.ParDo(PredictBoundingBoxes(model_path))
-            # )
+            batched_records = (
+                parsed_dataset_by_session
+                | f"Create batches size: {args.batch_size}"
+                >> beam.GroupIntoBatches(args.batch_size)
+            )
 
-            # batched_records = (
-            #     parsed_dataset
-            #     | f"Create batches size: {args.batch_size}"
-            #     >> beam.GroupIntoBatches(args.batch_size)
-            # )
+            tfrecord_sink_pipeline = batched_records | "Write TFRecords" >> beam.ParDo(
+                WriteBatchedTFRecords(args.tfrecord_sink, metadata.schema)
+            )
 
-            # tfrecord_sink_pipeline = (
-            #     batched_records
-            #     | "Write TFRecords"
-            #     >> beam.ParDo(
-            #         WriteBatchedTFRecords(args.tfrecord_sink, metadata.schema)
-            #     )
-            #     | "Print TFRecord paths" >> beam.Map(print)
-            # )
+            parquet_sink_pipeline = batched_records | "Write Parquet" >> beam.Map(
+                lambda x: write_batched_parquet(
+                    x,
+                    args.parquet_sink,
+                    NestedTelemetryEvent.pyarrow_schema(args.num_detections),
+                )
+            )
 
-            # parquet_sink_pipeline = (
-            #     batched_records
-            #     | "Write Parquet" >> beam.Map(lambda x:
-            #     write_batched_parquet(
-            #         x,
-            #         args.parquet_sink,
-            #         NestedTelemetryEvent.pyarrow_schema(args.num_detections),
-            #     ))
-            #     | "Print Parquet paths" >> beam.Map(print)
-            # )
-
-            # @ todo sink annotated frames to GCS for video reconstruction
-            # annotated_image_sink_pipeline = ()
-
-            # @todo implement BoundedSession
-            # probably easier to port everything to Java before attempting this
-            # https://www.oreilly.com/library/view/streaming-systems/9781491983867/ch04.html
-            health_per_session = (
+            should_alert_per_session_windowed = (
                 parsed_dataset
                 | "Drop detections below confidence threshold & outside of calibration area of interest"
                 >> beam.ParDo(
@@ -473,7 +579,18 @@ def run_pipeline(args, pipeline_args):
                         health_threshold=3,
                     )
                 )
-                | "Print df and trend data" >> beam.Map(print)
+            )
+            render_video = (
+                should_alert_per_session_windowed
+                | "Render video and trigger alert"
+                >> beam.ParDo(
+                    RenderVideoTriggerAlert(
+                        args.parquet_sink,
+                        args.video_upload_path,
+                        api_url=args.api_url,
+                        api_token=args.api_token,
+                    )
+                )
             )
 
 
@@ -516,8 +633,13 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "--video-upload-path",
+        default="gs://print-nanny-sandbox/public/uploads/defect_alert",
+    )
+
+    parser.add_argument(
         "--health-checkpoint-sink",
-        default="gs://print-nanny-sandbox/dataflow/telemetry_event/health",
+        default="gs://print-nanny-sandbox/dataflow/telemetry_event/windowed_health",
         help="Files will be output to this gcs bucket",
     )
 
