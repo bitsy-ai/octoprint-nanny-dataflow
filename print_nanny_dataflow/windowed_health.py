@@ -265,8 +265,8 @@ class RenderVideoTriggerAlert(beam.DoFn):
 
         # convert pcollection to Beam DataFrame API/DSL: https://beam.apache.org/blog/dataframe-api-preview-available/
         df = to_dataframe(
-            batched_records
-            | f"Read last {max_batches} batched records"
+            beam.Create(batched_records)
+            | f"Read last {self.max_batches} batched records"
             >> beam.io.parquetio.ReadAllFromParquet().with_output_types(
                 NestedTelemetryEvent
             )
