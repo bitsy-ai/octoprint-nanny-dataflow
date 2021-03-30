@@ -63,7 +63,7 @@ class WriteBatchedTFRecords(beam.DoFn):
         self.outdir = outdir
         self.dataset_metadata = dataset_metadata
 
-    def process(self, batched_elements):
+    def process(self, batched_elements: Tuple[str, Iterable[NestedTelemetryEvent]]):
         key, elements = batched_elements
         coder = ExampleProtoEncoder(self.dataset_metadata.schema)
         ts = int(datetime.now().timestamp())
@@ -300,32 +300,29 @@ class RenderVideoTriggerAlert(beam.DoFn):
 class AsWindowedHealthRecord(beam.DoFn):
     def process(
         self,
-        keyed_elements: Tuple[str, Iterable[NestedTelemetryEvent]],
+        keyed_element: Tuple[str, NestedTelemetryEvent],
         window=beam.DoFn.WindowParam,
-    ) -> Iterable[Tuple[str, Iterable[WindowedHealthRecord]]]:
-        session, elements = keyed_elements
+    ) -> Tuple[str, WindowedHealthRecord]:
+        session, event = keyed_element
         window_start = int(window.start)
         window_end = int(window.end)
         yield session, (
-            elements
-            | beam.FlatMap(
-                lambda: WindowedHealthRecord(
-                    ts=event.ts,
-                    session=event.session,
-                    client_version=event.client_version,
-                    user_id=event.user_id,
-                    device_id=event.device_id,
-                    device_cloudiot_id=event.device_cloudiot_id,
-                    detection_score=event.detection_scores[i],
-                    detection_class=event.detection_classes[i],
-                    window_start=window_start,
-                    window_end=window_end,
-                    health_multiplier=HEALTH_WEIGHTS[event.detection_classes[i]],
-                    health_score=HEALTH_WEIGHTS[event.detection_classes[i]]
-                    * event.detection_scores[i],
-                )
-                for i in range(0, event.num_detections)
+            WindowedHealthRecord(
+                ts=event.ts,
+                session=event.session,
+                client_version=event.client_version,
+                user_id=event.user_id,
+                device_id=event.device_id,
+                device_cloudiot_id=event.device_cloudiot_id,
+                detection_score=event.detection_scores[i],
+                detection_class=event.detection_classes[i],
+                window_start=window_start,
+                window_end=window_end,
+                health_multiplier=HEALTH_WEIGHTS[event.detection_classes[i]],
+                health_score=HEALTH_WEIGHTS[event.detection_classes[i]]
+                * event.detection_scores[i],
             )
+            for i in range(0, event.num_detections)
         )
 
 
@@ -442,7 +439,7 @@ def predict_bounding_boxes(element, model_path):
     return NestedTelemetryEvent(**defaults)
 
 
-class FilterDetectionsBase(beam.DoFn):
+class FilterDetections(beam.DoFn):
     def __init__(
         self,
         calibration_base_path: str,
@@ -456,9 +453,10 @@ class FilterDetectionsBase(beam.DoFn):
         self.calibration_filename = calibration_filename
         self.output_calibration = output_calibration
 
-    def process_element(
-        self, event: NestedTelemetryEvent
-    ) -> Iterable[NestedTelemetryEvent]:
+    def process(
+        self, keyed_element: Tuple[str, NestedTelemetryEvent]
+    ) -> Iterable[Tuple[str, NestedTelemetryEvent]]:
+        session, event = keyed_element
         gcs_client = beam.io.gcp.gcsio.GcsIO()
 
         device_id = event.device_id
@@ -484,38 +482,11 @@ class FilterDetectionsBase(beam.DoFn):
                     calibration = DeviceCalibration(**calibration_json)
                 else:
                     calibration = None
-                yield NestedTelemetryEvent(calibration=calibration ** event.to_dict())
+                yield session, NestedTelemetryEvent(
+                    calibration=calibration ** event.to_dict()
+                )
             else:
-                yield event
-
-    def process(self):
-        raise NotImplemented
-
-
-class FilterKeyedDetections(FilterDetectionsBase):
-    def __init__(
-        self,
-        calibration_base_path: str,
-        score_threshold: float = 0.5,
-        calibration_filename: str = "calibration.json",
-        output_calibration=False,
-    ):
-        self.score_threshold = 0.5
-        self.calibration_base_path = calibration_base_path
-        self.score_threshold = score_threshold
-        self.calibration_filename = calibration_filename
-        self.output_calibration = output_calibration
-
-    def process(
-        self, keyed_elements: Tuple[str, Iterable[NestedTelemetryEvent]]
-    ) -> Tuple[str, Iterable[NestedTelemetryEvent]]:
-        session, elements = keyed_elements
-        yield elements | beam.Map(lambda x: (session, self.process_element(x)))
-
-
-class FilterDetections(FilterDetectionsBase):
-    def process(self, element: NestedTelemetryEvent):
-        yield self.process_element(element)
+                yield session, event
 
 
 def run_pipeline(args, pipeline_args):
@@ -584,7 +555,6 @@ def run_pipeline(args, pipeline_args):
 
             windowed_view = (
                 parsed_dataset_by_session
-                | "Group by key" >> beam.GroupByKey()
                 | "Add sliding window"
                 >> beam.WindowInto(
                     beam.transforms.window.SlidingWindows(
@@ -593,26 +563,24 @@ def run_pipeline(args, pipeline_args):
                 )
             )
 
-            parquet_sink_pipeline = windowed_view | "Write Parquet" >> beam.ParDo(
-                WriteWindowedParquet(args.parquet_sink, pa_schema)
+            parquet_sink_pipeline = (
+                windowed_view
+                | "Group NestedTelemetryEvent by key" >> beam.GroupByKey()
+                | "Write Parquet"
+                >> beam.ParDo(WriteWindowedParquet(args.parquet_sink, pa_schema))
             )
 
             should_alert_per_session_windowed = (
                 windowed_view
                 | "Drop detections below confidence threshold & outside of calibration area of interest"
                 >> beam.ParDo(
-                    FilterKeyedDetections(
-                        args.calibration_base_path, score_threshold=0.5
-                    )
-                ).with_output_types(Tuple[str, Iterable[NestedTelemetryEvent]])
+                    FilterDetections(args.calibration_base_path, score_threshold=0.5)
+                )
                 | "Flatten remaining observations in NestedTelemetryEvent"
                 >> beam.ParDo(AsWindowedHealthRecord()).with_output_types(
-                    Tuple[str, Iterable[WindowedHealthRecord]]
+                    Tuple[str, WindowedHealthRecord]
                 )
-                # | DataframeTransform(lambda df: df.groupby(['session', 'window_start', 'window_end']).sum())
-                # | "Key WindowedHealthRecord by session"
-                # >> beam.Map(lambda e: (e.session, e))
-                # | "Group by key" >> beam.GroupByKey()
+                | "Group WindowedHealthRecord by key" >> beam.GroupByKey()
                 | "Write health checkpoint"
                 >> beam.ParDo(
                     WriteHealthCheckpoint(
@@ -737,7 +705,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--batch-size",
-        default=3,
+        default=256,
     )
 
     parser.add_argument("--postgres-host", default="localhost", help="Postgres host")
