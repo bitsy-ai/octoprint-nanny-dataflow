@@ -84,32 +84,13 @@ class WindowedHealthRecord(NamedTuple):
     window_start: int
     window_end: int
 
+    image_path: str
+
     def to_dict(self) -> Dict[str, Any]:
         return self._asdict()
 
     def to_dataframe(self) -> pd.DataFrame:
         return pd.DataFrame(self.to_dict(), index=["ts", "detection_class"])
-
-    @staticmethod
-    def records_to_health_dataframe(records) -> pd.DataFrame:
-        data = {
-            "ts": self.ts,
-            "detection_class": self.detection_classes,
-            "detection_score": self.detection_scores,
-            "window_start": window_start,
-            "window_end": window_end,
-            "session": self.session,
-            "user_id": self.user_id,
-            "device_id": self.device_id,
-        }
-        df = (
-            pd.DataFrame.from_records([data])
-            .set_index("ts")
-            .apply(pd.Series.explode)
-            .reset_index()
-        )
-
-        return df.set_index(["ts", "detection_class"])
 
 
 class DeviceCalibration(NamedTuple):
@@ -125,8 +106,6 @@ class NestedTelemetryEvent(NamedTuple):
 
     ts: int
     client_version: str
-    event_type: int
-    event_data_type: int
     session: str
 
     # Metadata
@@ -155,35 +134,24 @@ class NestedTelemetryEvent(NamedTuple):
     def pyarrow_schema(num_detections):
         return pa.schema(
             [
-                pa.field(
-                    "boxes_xmax", pa.list_(pa.float32(), list_size=num_detections)
-                ),
-                pa.field(
-                    "boxes_xmin", pa.list_(pa.float32(), list_size=num_detections)
-                ),
-                pa.field(
-                    "boxes_ymax", pa.list_(pa.float32(), list_size=num_detections)
-                ),
-                pa.field(
-                    "boxes_ymin", pa.list_(pa.float32(), list_size=num_detections)
-                ),
-                pa.field("client_version", pa.string()),
-                pa.field(
-                    "detection_classes", pa.list_(pa.int32(), list_size=num_detections)
-                ),
-                pa.field(
-                    "detection_scores", pa.list_(pa.float32(), list_size=num_detections)
-                ),
-                pa.field("device_cloudiot_id", pa.int32()),
-                pa.field("device_id", pa.int32()),
-                pa.field("event_data_type", pa.string()),
-                pa.field("event_type", pa.string()),
-                pa.field("image_data", pa.binary()),
-                pa.field("image_height", pa.int32()),
-                pa.field("image_width", pa.int32()),
-                pa.field("num_detections", pa.int32()),
-                pa.field("ts", pa.int32()),
-                pa.field("user_id", pa.int32()),
+                ("ts", pa.int32()),
+                ("client_version", pa.string()),
+                ("session", pa.string()),
+                ("user_id", pa.int32()),
+                ("boxes_xmax", pa.list_(pa.float32(), list_size=num_detections)),
+                ("boxes_xmin", pa.list_(pa.float32(), list_size=num_detections)),
+                ("boxes_ymax", pa.list_(pa.float32(), list_size=num_detections)),
+                ("boxes_ymin", pa.list_(pa.float32(), list_size=num_detections)),
+                ("client_version", pa.string()),
+                ("detection_classes", pa.list_(pa.int32(), list_size=num_detections)),
+                ("detection_scores", pa.list_(pa.float32(), list_size=num_detections)),
+                ("device_cloudiot_id", pa.int32()),
+                ("device_id", pa.int32()),
+                ("image_data", pa.binary()),
+                ("annotated_image_data", pa.binary()),
+                ("image_height", pa.int32()),
+                ("image_width", pa.int32()),
+                ("num_detections", pa.int32()),
             ]
         )
 
@@ -200,8 +168,6 @@ class NestedTelemetryEvent(NamedTuple):
                 "detection_scores": tf.io.FixedLenFeature([num_detections], tf.float32),
                 "device_cloudiot_id": tf.io.FixedLenFeature([], tf.int64),
                 "device_id": tf.io.FixedLenFeature([], tf.int64),
-                "event_data_type": tf.io.FixedLenFeature([], tf.int64),
-                "event_type": tf.io.FixedLenFeature([], tf.int64),
                 "image_data": tf.io.FixedLenFeature([], tf.string),
                 "image_height": tf.io.FixedLenFeature([], tf.int64),
                 "image_width": tf.io.FixedLenFeature([], tf.int64),
@@ -244,8 +210,6 @@ class NestedTelemetryEvent(NamedTuple):
             ts=obj.metadata.ts,
             session=obj.metadata.session.decode("utf-8"),
             client_version=obj.metadata.clientVersion.decode("utf-8"),
-            event_type=obj.eventType,
-            event_data_type=obj.eventDataType,
             image_height=obj.eventData.image.height,
             image_width=obj.eventData.image.width,
             image_tensor=tf.expand_dims(tf.io.decode_jpeg(image_data), axis=0),

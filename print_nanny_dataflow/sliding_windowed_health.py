@@ -63,11 +63,17 @@ class WriteBatchedTFRecords(beam.DoFn):
         self.outdir = outdir
         self.dataset_metadata = dataset_metadata
 
-    def process(self, batched_elements: Tuple[str, Iterable[NestedTelemetryEvent]]):
-        key, elements = batched_elements
+    def process(
+        self,
+        keyed_elements: Tuple[str, Iterable[NestedTelemetryEvent]],
+        window=beam.DoFn.WindowParam,
+    ):
+        key, elements = keyed_elements
+        window_start = int(window.start)
+        window_end = int(window.end)
+
         coder = ExampleProtoEncoder(self.dataset_metadata.schema)
-        ts = int(datetime.now().timestamp())
-        output = os.path.join(self.outdir, key, str(ts))
+        output = os.path.join(self.outdir, key, f"{window_start}_{window_end}")
         logger.info(f"Writing {output} with coder {coder}")
         yield (
             elements
@@ -100,8 +106,10 @@ class WriteWindowedParquet(beam.DoFn):
         output_path = os.path.join(
             self.parquet_base_path, session, f"{window_start}_{window_end}.parquet"
         )
-
-        yield (elements | beam.io.parquetio.WriteToParquet(output_path, self.schema))
+        # WriteToParquet only supports dict-like inputs?
+        yield beam.Map(lambda e: e.to_dict()) | beam.io.parquetio.WriteToParquet(
+            output_path, self.schema, num_shards=1, shard_name_template=""
+        )
 
 
 async def download_active_experiment_model(tmp_dir=".tmp/", model_artifact_id=1):
@@ -123,52 +131,53 @@ async def download_active_experiment_model(tmp_dir=".tmp/", model_artifact_id=1)
     logger.info(f"Finished extracting {tmp_artifacts_tarball}")
 
 
-class WriteHealthCheckpoint(beam.DoFn):
-    """
-    Writes a SlidingWindow checkpoint to gcs
-    Emits all record paths within window size
-    """
+# class WriteHealthCheckpoint(beam.DoFn):
+#     """
+#     Writes a SlidingWindow checkpoint to gcs
+#     Emits all record paths within window size
+#     """
 
-    def __init__(self, checkpoint_sink, window_size, window_period):
-        self.checkpoint_sink = checkpoint_sink
-        self.window_size = window_size
-        self.window_period = window_period
-        self.window_lookback = window_size // window_period
+#     def __init__(self, checkpoint_sink, window_size, window_period):
+#         self.checkpoint_sink = checkpoint_sink
+#         self.window_size = window_size
+#         self.window_period = window_period
+#         self.window_lookback = window_size // window_period
 
-    def process(
-        self,
-        keyed_elements: Tuple[Any, Iterable[WindowedHealthRecord]],
-        window=beam.DoFn.WindowParam,
-    ):
+#     def process(
+#         self,
+#         keyed_elements: Tuple[Any, Iterable[WindowedHealthRecord]],
+#         window=beam.DoFn.WindowParam,
+#     ):
 
-        session, health_records = keyed_elements
+#         session, health_records = keyed_elements
 
-        base_path = os.path.join(self.checkpoint_sink, session)
+#         base_path = os.path.join(self.checkpoint_sink, session)
 
-        window_start = int(window.start)
-        window_end = int(window.end)
-        output_path = os.path.join(
-            base_path,
-            f"{window_start}_{window_end}.parquet",
-        )
-        df = pd.concat([e.to_dataframe() for e in health_records]).sort_values("ts")
-        df.to_parquet(output_path, engine="pyarrow")
-        logger.info(f"Wrote {output_path}")
+#         window_start = int(window.start)
+#         window_end = int(window.end)
+#         output_path = os.path.join(
 
-        gcs_client = beam.io.gcp.gcsio.GcsIO()
+#             base_path,
+#             f"{window_start}_{window_end}.parquet",
+#         )
+#         df = pd.concat([e.to_dataframe() for e in health_records]).sort_values("ts")
+#         df.to_parquet(output_path, engine="pyarrow")
+#         logger.info(f"Wrote {output_path}")
 
-        past_checkpoints = list(gcs_client.list_prefix(base_path).keys())
-        if len(past_checkpoints) > self.window_lookback:
-            # get most recent windows from selection
-            past_checkpoints = past_checkpoints[-self.window_lookback :]
+#         gcs_client = beam.io.gcp.gcsio.GcsIO()
 
-        return past_checkpoints
+#         past_checkpoints = list(gcs_client.list_prefix(base_path).keys())
+#         if len(past_checkpoints) > self.window_lookback:
+#             # get most recent windows from selection
+#             past_checkpoints = past_checkpoints[-self.window_lookback :]
+
+#         return past_checkpoints
 
 
 class RenderVideoTriggerAlert(beam.DoFn):
     def __init__(
         self,
-        parquet_sink,
+        fixed_window_sink,
         video_upload_path,
         calibration_base_path,
         api_url,
@@ -178,7 +187,7 @@ class RenderVideoTriggerAlert(beam.DoFn):
         score_threshold=0.5,
         max_boxes_to_draw=10,
     ):
-        self.parquet_sink = parquet_sink
+        self.fixed_window_sink = fixed_window_sink
         self.max_batches = max_batches
         self.api_url = api_url
         self.api_token = api_token
@@ -259,7 +268,13 @@ class RenderVideoTriggerAlert(beam.DoFn):
             writer.close()
         yield output_path
 
-    def process(self, session: str, window=beam.DoFn.WindowParam):
+    def process(
+        self,
+        keyed_elements: Tuple[str, NestedTelemetryEvent],
+        window=beam.DoFn.WindowParam,
+    ):
+
+        session, elements
         window_start = int(window.start)
         window_end = int(window.end)
         input_path = os.path.join(
@@ -267,23 +282,14 @@ class RenderVideoTriggerAlert(beam.DoFn):
             session,
             f"{window_start}_{window_end}.parquet",
         )
-        gcs_client = beam.io.gcp.gcsio.GcsIO()
-        batched_records = list(gcs_client.list_prefix(input_path).keys())
-        if len(batched_records) > self.max_batches:
-            # get most recent windows from selection
-            batched_records = batched_records[-self.max_batches :]
 
         # convert pcollection to Beam DataFrame API/DSL for sort operation: https://beam.apache.org/blog/dataframe-api-preview-available/
         # pcollections are an unordered set
         yield (
-            beam.Create(batched_records)
-            | f"Read last {self.max_batches} batched records"
-            >> beam.io.parquetio.ReadAllFromParquet().with_output_types(
-                NestedTelemetryEvent
-            )
+            elements
             | "Filter area of interest and detections above threshold"
             >> beam.ParDo(
-                FilterDetections(
+                FilterAreaOfInterest(
                     self.calibration_base_path,
                     score_threshold=self.score_threshold,
                     output_calibration=True,
@@ -302,11 +308,14 @@ class AsWindowedHealthRecord(beam.DoFn):
         self,
         keyed_element: Tuple[str, NestedTelemetryEvent],
         window=beam.DoFn.WindowParam,
-    ) -> Tuple[str, WindowedHealthRecord]:
+    ) -> Iterable[WindowedHealthRecord]:
         session, event = keyed_element
         window_start = int(window.start)
         window_end = int(window.end)
-        yield session, (
+
+        # save frame for later rendering
+
+        return (
             WindowedHealthRecord(
                 ts=event.ts,
                 session=event.session,
@@ -319,8 +328,7 @@ class AsWindowedHealthRecord(beam.DoFn):
                 window_start=window_start,
                 window_end=window_end,
                 health_multiplier=HEALTH_WEIGHTS[event.detection_classes[i]],
-                health_score=HEALTH_WEIGHTS[event.detection_classes[i]]
-                * event.detection_scores[i],
+                health_score=HEALTH_WEIGHTS[event.detection_classes[i]],
             )
             for i in range(0, event.num_detections)
         )
@@ -333,7 +341,7 @@ def absolute_log(df, log_fn=np.log2):
     return log_fn(np.abs(df))
 
 
-class CalcHealthScoreTrend(beam.DoFn):
+class CheckpointHealthScoreTrend(beam.DoFn):
     def __init__(
         self,
         checkpoint_sink,
@@ -387,6 +395,7 @@ class CalcHealthScoreTrend(beam.DoFn):
             .sort_values("ts")
             .set_index(["ts", "detection_class"])
         )
+        df.to_parquet(output_path, engine="pyarrow")
         n_windows = len(df["window_start"].unique())
         window_start = int(window.start)
         window_end = int(window.end)
@@ -439,7 +448,7 @@ def predict_bounding_boxes(element, model_path):
     return NestedTelemetryEvent(**defaults)
 
 
-class FilterDetections(beam.DoFn):
+class FilterAreaOfInterest(beam.DoFn):
     def __init__(
         self,
         calibration_base_path: str,
@@ -447,7 +456,6 @@ class FilterDetections(beam.DoFn):
         calibration_filename: str = "calibration.json",
         output_calibration=False,
     ):
-        self.score_threshold = 0.5
         self.calibration_base_path = calibration_base_path
         self.score_threshold = score_threshold
         self.calibration_filename = calibration_filename
@@ -464,8 +472,6 @@ class FilterDetections(beam.DoFn):
             self.calibration_base_path, str(device_id), self.calibration_filename
         )
 
-        event = event.min_score_filter(score_threshold=self.score_threshold)
-
         calibration_json = None
         if gcs_client.exists(device_calibration_path):
             with gcs_client.open(device_calibration_path, "r") as f:
@@ -476,17 +482,12 @@ class FilterDetections(beam.DoFn):
 
             coordinates = calibration_json["coordinates"]
             event = NestedTelemetryEvent.calibration_filter(event, coordinates)
-        if event.num_detections >= 1:
-            if self.output_calibration is True:
-                if calibration_json:
-                    calibration = DeviceCalibration(**calibration_json)
-                else:
-                    calibration = None
-                yield session, NestedTelemetryEvent(
-                    calibration=calibration ** event.to_dict()
-                )
-            else:
-                yield session, event
+
+        if calibration_json:
+            calibration = DeviceCalibration(**calibration_json)
+        else:
+            calibration = None
+        yield session, NestedTelemetryEvent(calibration=calibration ** event.to_dict())
 
 
 def run_pipeline(args, pipeline_args):
@@ -543,17 +544,28 @@ def run_pipeline(args, pipeline_args):
             tf_record_schema = NestedTelemetryEvent.tfrecord_metadata(tf_feature_spec)
             pa_schema = NestedTelemetryEvent.pyarrow_schema(args.num_detections)
 
-            batched_records = (
+            fixed_window_view = (
                 parsed_dataset_by_session
-                | f"Create batches size: {args.batch_size}"
-                >> beam.GroupIntoBatches(args.batch_size)
+                | f"Add fixed window"
+                >> beam.WindowInto(
+                    beam.transforms.window.FixedWindows(args.health_window_period)
+                )
+                | "Group FixedWindow NestedTelemetryEvent by key" >> beam.GroupByKey()
             )
 
-            tfrecord_sink_pipeline = batched_records | "Write TFRecords" >> beam.ParDo(
-                WriteBatchedTFRecords(args.tfrecord_sink, tf_record_schema)
+            tfrecord_sink_pipeline = (
+                fixed_window_view
+                | "Write TFRecords"
+                >> beam.ParDo(
+                    WriteBatchedTFRecords(args.tfrecord_sink, tf_record_schema)
+                )
             )
 
-            windowed_view = (
+            parquet_sink_pipeline = fixed_window_view | "Write Parquet" >> beam.ParDo(
+                WriteWindowedParquet(args.parquet_sink, pa_schema)
+            )
+
+            sliding_window_view = (
                 parsed_dataset_by_session
                 | "Add sliding window"
                 >> beam.WindowInto(
@@ -563,47 +575,47 @@ def run_pipeline(args, pipeline_args):
                 )
             )
 
-            parquet_sink_pipeline = (
-                windowed_view
-                | "Group NestedTelemetryEvent by key" >> beam.GroupByKey()
-                | "Write Parquet"
-                >> beam.ParDo(WriteWindowedParquet(args.parquet_sink, pa_schema))
-            )
-
             should_alert_per_session_windowed = (
-                windowed_view
+                sliding_window_view
                 | "Drop detections below confidence threshold & outside of calibration area of interest"
                 >> beam.ParDo(
-                    FilterDetections(args.calibration_base_path, score_threshold=0.5)
-                )
-                | "Flatten remaining observations in NestedTelemetryEvent"
-                >> beam.ParDo(AsWindowedHealthRecord()).with_output_types(
-                    Tuple[str, WindowedHealthRecord]
-                )
-                | "Group WindowedHealthRecord by key" >> beam.GroupByKey()
-                | "Write health checkpoint"
-                >> beam.ParDo(
-                    WriteHealthCheckpoint(
-                        args.health_checkpoint_sink,
-                        args.health_window_size,
-                        args.health_window_period,
+                    FilterAreaOfInterest(
+                        args.calibration_base_path, score_threshold=0.5
                     )
                 )
-                | f"Load last {args.health_window_size}s parquet checkpoints"
-                >> beam.io.parquetio.ReadAllFromParquet()
-                | "Rekey by session id" >> beam.Map(lambda x: (x["session"], x))
-                | "Group by session id" >> beam.GroupByKey()
+                | "Flatten remaining observations in NestedTelemetryEvent"
+                >> beam.ParDo(AsWindowedHealthRecord())
+                | "Group WindowedHealthRecord by key" >> beam.GroupBy("session")
+                # | "Write health checkpoint"
+                # >> beam.ParDo(
+                #     WriteHealthCheckpoint(
+                #         args.health_checkpoint_sink,
+                #         args.health_window_size,
+                #         args.health_window_period,
+                #     )
+                # )
+                # | f"Load last {args.health_window_size}s parquet checkpoints"
+                # >> beam.io.parquetio.ReadAllFromParquet()
+                # | "Rekey by session id" >> beam.Map(lambda x: (x["session"], x))
+                # | "Group by session id" >> beam.GroupByKey()
                 | "Calculate health score trend"
                 >> beam.ParDo(
-                    CalcHealthScoreTrend(
+                    CheckpointHealthScoreTrend(
                         args.health_checkpoint_sink,
                         args.health_window_size,
                         args.health_window_period,
                         args.api_url,
                         args.api_token,
-                        health_threshold=3,
                     )
                 )
+            )
+
+            gcs_client = beam.io.gcp.gcsio.GcsIO()
+            render_video_pipeline = (
+                should_alert_per_session_windowed
+                | "List all fixed window records for session"
+                >> beam.Map(lambda x: tuple(x, list_gcs_files(args.parquet, x)))
+                | "Read fixed window records" >> beam.io.ReadAllFromParquet()
                 | "Render video and trigger alert"
                 >> beam.ParDo(
                     RenderVideoTriggerAlert(
@@ -615,6 +627,12 @@ def run_pipeline(args, pipeline_args):
                     )
                 )
             )
+
+
+def list_gcs_files(base_path, key):
+    gcs_client = beam.io.gcp.gcsio.GcsIO()
+    path = os.join(base_path, key)
+    return gcs_client.list_prefix(path).keys()
 
 
 if __name__ == "__main__":
@@ -645,13 +663,13 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--tfrecord-sink",
-        default="gs://print-nanny-sandbox/dataflow/telemetry_event/tfrecords/batched",
+        default="gs://print-nanny-sandbox/dataflow/telemetry_event/fixed_window/",
         help="Files will be output to this gcs bucket",
     )
 
     parser.add_argument(
         "--parquet-sink",
-        default="gs://print-nanny-sandbox/dataflow/telemetry_event/parquet/windowed",
+        default="gs://print-nanny-sandbox/dataflow/telemetry_event/fixed_window/parquet",
         help="Files will be output to this gcs bucket",
     )
 
@@ -662,7 +680,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--health-checkpoint-sink",
-        default="gs://print-nanny-sandbox/dataflow/telemetry_event/windowed_health",
+        default="gs://print-nanny-sandbox/dataflow/telemetry_event/sliding_window/health",
         help="Files will be output to this gcs bucket",
     )
 
