@@ -30,7 +30,7 @@ class WriteWindowedTFRecord(beam.DoFn):
         output = os.path.join(self.base_path, key, f"{window_start}_{window_end}")
         logger.info(f"Writing {output} with coder {coder}")
         yield (
-            element
+            elements
             | beam.io.tfrecordio.WriteToTFRecord(
                 file_path_prefix=output,
                 num_shards=1,

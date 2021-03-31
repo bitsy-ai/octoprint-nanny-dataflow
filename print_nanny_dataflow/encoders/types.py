@@ -74,7 +74,7 @@ class WindowedHealthRecord(NamedTuple):
     device_cloudiot_id: int
 
     health_score: npt.Float32
-    health_multiplier: npt.Float32
+    health_weight: npt.Float32
     detection_score: npt.Float32
     detection_class: npt.Int32
 
@@ -86,6 +86,25 @@ class WindowedHealthRecord(NamedTuple):
 
     def to_dataframe(self) -> pd.DataFrame:
         return pd.DataFrame(self.to_dict(), index=["ts", "detection_class"])
+
+    @staticmethod
+    def pyarrow_schema():
+        return pa.schema(
+            [
+                ("ts", pa.int64()),
+                ("client_version", pa.string()),
+                ("session", pa.string()),
+                ("user_id", pa.int32()),
+                ("health_score", pa.float32()),
+                ("health_weight", pa.float32()),
+                ("window_start", pa.int64()),
+                ("window_end", pa.int64()),
+                ("detection_class", pa.int32()),
+                ("detection_score", pa.float32()),
+                ("device_cloudiot_id", pa.int64()),
+                ("device_id", pa.int32()),
+            ]
+        )
 
 
 class DeviceCalibration(NamedTuple):
@@ -176,7 +195,6 @@ class NestedTelemetryEvent(NamedTuple):
                 ("boxes_xmin", pa.list_(pa.float32(), list_size=num_detections)),
                 ("boxes_ymax", pa.list_(pa.float32(), list_size=num_detections)),
                 ("boxes_ymin", pa.list_(pa.float32(), list_size=num_detections)),
-                ("client_version", pa.string()),
                 ("detection_classes", pa.list_(pa.int32(), list_size=num_detections)),
                 ("detection_scores", pa.list_(pa.float32(), list_size=num_detections)),
                 ("device_cloudiot_id", pa.int64()),
