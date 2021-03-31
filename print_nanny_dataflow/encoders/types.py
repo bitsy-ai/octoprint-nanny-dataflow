@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 
 from typing import Tuple, Dict, Any, NamedTuple
 import pandas as pd
@@ -34,34 +35,26 @@ POSITIVE_LABELS = {
     4: "print",
 }
 
+# @todo add to over-the-wire flatbuffer schemas
+class PendingAlert(NamedTuple):
+    client_version: str
+    session: str
+    file_pattern: str
+    user_id: int
+    device_id: int
+    device_cloudiot_id: int
+    window_start: int
+    window_end: int
 
-class Image(NamedTuple):
-    height: int
-    width: int
-    data: bytes
-    # ndarray: np.ndarray
+    def to_json(self):
+        return json.dumps(self._asdict())
 
+    def to_bytes(self):
+        return self.to_json().encode("utf-8")
 
-class Box(NamedTuple):
-    detection_score: npt.Float32
-    detection_class: npt.Int32
-    ymin: npt.Float32
-    xmin: npt.Float32
-    ymax: npt.Float32
-    xmax: npt.Float32
-
-
-class BoundingBoxAnnotation(NamedTuple):
-    num_detections: int
-    detection_scores: np.ndarray
-    detection_boxes: np.ndarray
-    detection_classes: np.ndarray
-
-
-class MonitoringFrame(NamedTuple):
-    ts: int
-    image: Image
-    bounding_boxes: BoundingBoxAnnotation = None
+    @classmethod
+    def from_bytes(cls, b: bytes):
+        return cls(**json.loads(b.decode("utf-8")))
 
 
 class WindowedHealthRecord(NamedTuple):
@@ -74,9 +67,9 @@ class WindowedHealthRecord(NamedTuple):
     session: str
 
     # Metadata
-    user_id: npt.Float32
-    device_id: npt.Float32
-    device_cloudiot_id: npt.Float32
+    user_id: int
+    device_id: int
+    device_cloudiot_id: int
 
     health_score: npt.Float32
     health_multiplier: npt.Float32
@@ -85,8 +78,6 @@ class WindowedHealthRecord(NamedTuple):
 
     window_start: int
     window_end: int
-
-    image_path: str
 
     def to_dict(self) -> Dict[str, Any]:
         return self._asdict()
@@ -100,7 +91,9 @@ class DeviceCalibration(NamedTuple):
     mask = npt.NDArray[npt.Bool]
     fpm = int
 
-    def filter_event(self, event: 'NestedTelemetryEvent', min_overlap_area: float = 0.75):
+    def filter_event(
+        self, event: "NestedTelemetryEvent", min_overlap_area: float = 0.75
+    ):
         percent_intersection = self.percent_intersection(self.coordinates)
         ignored_mask = percent_intersection <= min_overlap_area
 
@@ -136,6 +129,8 @@ class DeviceCalibration(NamedTuple):
             calbiration=self,
             **default_fieldset
         )
+
+
 class NestedTelemetryEvent(NamedTuple):
     """
     1 NestedTelemetryEvent : 1 Monitoring Frame
@@ -146,9 +141,9 @@ class NestedTelemetryEvent(NamedTuple):
     session: str
 
     # Metadata
-    user_id: npt.Float32
-    device_id: npt.Float32
-    device_cloudiot_id: npt.Float32
+    user_id: int
+    device_id: int
+    device_cloudiot_id: int
 
     # BoundingBoxes
     detection_scores: npt.NDArray[npt.Float32]
@@ -171,7 +166,7 @@ class NestedTelemetryEvent(NamedTuple):
     def pyarrow_schema(num_detections):
         return pa.schema(
             [
-                ("ts", pa.int32()),
+                ("ts", pa.int64()),
                 ("client_version", pa.string()),
                 ("session", pa.string()),
                 ("user_id", pa.int32()),
@@ -182,7 +177,7 @@ class NestedTelemetryEvent(NamedTuple):
                 ("client_version", pa.string()),
                 ("detection_classes", pa.list_(pa.int32(), list_size=num_detections)),
                 ("detection_scores", pa.list_(pa.float32(), list_size=num_detections)),
-                ("device_cloudiot_id", pa.int32()),
+                ("device_cloudiot_id", pa.int64()),
                 ("device_id", pa.int32()),
                 ("image_data", pa.binary()),
                 ("annotated_image_data", pa.binary()),
@@ -210,7 +205,7 @@ class NestedTelemetryEvent(NamedTuple):
                 "image_width": tf.io.FixedLenFeature([], tf.int64),
                 "num_detections": tf.io.FixedLenFeature([], tf.float32),
                 "session": tf.io.FixedLenFeature([], tf.string),
-                "ts": tf.io.FixedLenFeature([], tf.float32),
+                "ts": tf.io.FixedLenFeature([], tf.int64),
                 "user_id": tf.io.FixedLenFeature([], tf.int64),
             }
         )
@@ -375,4 +370,3 @@ class NestedTelemetryEvent(NamedTuple):
         return np.array(
             [self.boxes_ymin, self.boxes_xmin, self.boxes_ymax, self.boxes_xmax]
         ).T
-

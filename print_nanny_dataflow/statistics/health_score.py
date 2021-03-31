@@ -5,7 +5,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def health_score_trend_polynormial_v1(
+def health_score_trend_polynomial_v1(
     df: pd.DataFrame, degree=1
 ) -> np.polynomial.polynomial.Polynomial:
     """
