@@ -28,14 +28,18 @@ alerts-local-dev:
 	--runner DirectRunner \
 	--loglevel INFO \
 	--api-url="http://localhost:8000/api" \
-	--api-token=$$PRINT_NANNY_API_TOKEN
+	--api-token=$$PRINT_NANNY_API_TOKEN \
+	--runtime_type_check
+
 
 health-local-dev:
-	$(PYTHON) print_nanny_dataflow/sliding_windowed_health.py \
+	$(PYTHON) print_nanny_dataflow/pipelines/sliding_window_health.py \
 	--runner DirectRunner \
 	--loglevel INFO \
 	--api-url="http://localhost:8000/api" \
-	--api-token=$$PRINT_NANNY_API_TOKEN
+	--api-token=$$PRINT_NANNY_API_TOKEN \
+	--runtime_type_check
+
 
 dataflow-prod:
 	$(PYTHON) windowed_tfrecords.py \

@@ -1,14 +1,16 @@
 from __future__ import annotations
 import json
 
-from typing import Tuple, Dict, Any, NamedTuple
+from typing import Tuple, Dict, Any, NamedTuple, TypeVar, Generic
 import pandas as pd
 import numpy as np
 import nptyping as npt
 import tensorflow as tf
 from tensorflow_transform.tf_metadata import schema_utils
 from tensorflow_transform.tf_metadata import dataset_metadata
+from tensorflow_metadata.proto.v0 import schema_pb2
 
+from apache_beam.pvalue import PCollection
 import pyarrow as pa
 from print_nanny_client.telemetry_event import TelemetryEvent
 
@@ -35,7 +37,7 @@ POSITIVE_LABELS = {
     4: "print",
 }
 
-# @todo add to over-the-wire flatbuffer schemas
+
 class PendingAlert(NamedTuple):
     client_version: str
     session: str
@@ -188,7 +190,7 @@ class NestedTelemetryEvent(NamedTuple):
         )
 
     @staticmethod
-    def tf_feature_spec(num_detections):
+    def tfrecord_schema(num_detections: int) -> schema_pb2.Schema:
         return schema_utils.schema_from_feature_spec(
             {
                 "boxes_xmax": tf.io.FixedLenFeature([num_detections], tf.float32),
@@ -210,9 +212,10 @@ class NestedTelemetryEvent(NamedTuple):
             }
         )
 
-    @staticmethod
-    def tfrecord_metadata(tf_feature_spec):
-        return dataset_metadata.DatasetMetadata(tf_feature_spec)
+    @classmethod
+    def tfrecord_metadata(cls, num_detections: int) -> DatasetMetadata:
+        schema = cls.tfrecord_schema(num_detections)
+        return dataset_metadata.DatasetMetadata(schema)
 
     @classmethod
     def from_flatbuffer(cls, input_bytes):
