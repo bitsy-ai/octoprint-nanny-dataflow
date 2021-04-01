@@ -27,7 +27,12 @@ from tensorflow_transform.beam import impl as beam_impl
 from tensorflow_serving.apis import predict_pb2
 from apache_beam.dataframe.convert import to_dataframe, to_pcollection
 from apache_beam.dataframe.transforms import DataframeTransform
-
+from apache_beam.transforms.trigger import (
+    OrFinally,
+    AfterCount,
+    Repeatedly,
+    AfterWatermark,
+)
 from apache_beam.transforms import trigger
 from tensorflow_transform.tf_metadata import dataset_metadata
 
@@ -153,22 +158,16 @@ def run_pipeline(args, pipeline_args):
             )
         )
 
-        sliding_window_view = (
-            parsed_dataset
-            | "Add sliding window"
-            >> beam.WindowInto(
-                beam.transforms.window.SlidingWindows(
-                    args.health_window_size, args.health_window_period
-                ),
-                accumulation_mode=beam.transforms.trigger.AccumulationMode.ACCUMULATING,
-            )
-            # | "Explode arrays in NestedTelemetryEvent"
-            # >> beam.ParDo(ExplodeWindowedHealthRecord())| beam.GroupBy("session")
+        sliding_window_view = parsed_dataset | "Add sliding window" >> beam.WindowInto(
+            beam.transforms.window.SlidingWindows(
+                args.health_window_size, args.health_window_period
+            ),
+            accumulation_mode=beam.transforms.trigger.AccumulationMode.ACCUMULATING,
         )
 
         _ = (
             sliding_window_view
-            | "Write SlidingWindow ExplodeWindowedHealthRecord Parquet"
+            | "Write SlidingWindow ExplodeWindowedHealthRecord Parquet (unfilterd)"
             >> beam.ParDo(ExplodeWindowedHealthRecord())
             | "Group unfiltered health records by key" >> beam.GroupBy("session")
             | "Write SlidingWindow Parquet"
@@ -180,7 +179,9 @@ def run_pipeline(args, pipeline_args):
             )
         )
 
-        # @TODO enrich pcol with calibration as side input to avoid group/transform/regroup?
+        # @TODO enrich pcol with calibration as side input to avoid rdisk reload -> group -> transform -> regroup?
+        # This is implemented as a Singleton instance in Java, which can be shared across threads and used as a cache
+        # The Python implementation probably uses multiprocessing.shared_memory, which might actually be higher latency than hitting disk for most workloads?
 
         windowed_health_dataframe = (
             sliding_window_view
@@ -195,33 +196,41 @@ def run_pipeline(args, pipeline_args):
             | "Windowed health DataFrame" >> beam.ParDo(SortWindowedHealthDataframe())
         )
 
-        # _ = (
-        #     windowed_health_dataframe
-        #     | "Write health trend parquet" >> beam.GroupByKey()
-        #     | beam.ParDo(
-        #         WriteWindowedParquet(
-        #             args.sliding_window_health_trend_sink,
-        #             WindowedHealthDataFrames.pyarrow_schema(args.num_detections),
-        #         )
-        #     )
-        # )
+        _ = (
+            windowed_health_dataframe
+            | "Write health trend parquet" >> beam.GroupByKey()
+            | beam.ParDo(
+                WriteWindowedParquet(
+                    args.sliding_window_health_trend_sink,
+                    WindowedHealthDataFrames.pyarrow_schema(args.num_detections),
+                )
+            )
+        )
 
-        alert_pipeline = (
+        alert_pipeline_trigger = OrFinally(Repeatedly(AfterCount(1)), AfterWatermark())
+        session_gap = args.health_window_period * 3
+
+        # accumulates failure count
+        stateful_health_dataframe = (
             windowed_health_dataframe
             | beam.WindowInto(
-                beam.transforms.window.Sessions(args.health_window_period * 2),
-                trigger=beam.transforms.trigger.AfterCount(1),
+                beam.transforms.window.Sessions(session_gap),
+                trigger=alert_pipeline_trigger,
                 accumulation_mode=beam.transforms.trigger.AccumulationMode.DISCARDING,
             )
             | "Stateful health score threshold monitor"
             >> beam.ParDo(MonitorHealthStateful(output_topic_path))
-            # | "Write health trend parquet" >> beam.GroupBy("session")
-            # | beam.ParDo(
-            #     WriteWindowedParquet(
-            #         args.sliding_window_health_trend_sink,
-            #         WindowedHealthDataFrames.pyarrow_schema(),
-            #     )
-            # )
+        )
+
+        _ = (
+            stateful_health_dataframe
+            | "Write session windows to Parquet" >> beam.GroupByKey()
+            | beam.ParDo(
+                WriteWindowedParquet(
+                    args.session_window_health_trend_sink,
+                    WindowedHealthDataFrames.pyarrow_schema(),
+                )
+            )
         )
 
 
@@ -265,26 +274,26 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--fixed-window-tfrecord-sink",
-        default="gs://print-nanny-sandbox/dataflow/telemetry_event/fixed_window/tfrecords",
-        help="Files will be output to this gcs bucket",
+        default="gs://print-nanny-sandbox/dataflow/telemetry_event/fixed_window/NestedTelemetryEvent/tfrecords",
+        help="Unfiltered NestedTelemetryEvent emitted from FixedWindow (single point in time)",
     )
 
     parser.add_argument(
         "--fixed-window-parquet-sink",
-        default="gs://print-nanny-sandbox/dataflow/telemetry_event/fixed_window/parquet",
-        help="Files will be output to this gcs bucket",
+        default="gs://print-nanny-sandbox/dataflow/telemetry_event/fixed_window/NestedTelemetryEvent/parquet",
+        help="Unfiltered NestedTelemetryEvent emitted from FixedWindow (single point in time)",
     )
 
     parser.add_argument(
         "--sliding-window-health-raw-sink",
-        default="gs://print-nanny-sandbox/dataflow/telemetry_event/sliding_window/health/raw/",
-        help="Files will be output to this gcs bucket",
+        default="gs://print-nanny-sandbox/dataflow/telemetry_event/sliding_window/WindowedHealthRecord/parquet",
+        help="Unfiltered WindowedHealthRecord emitted from SlidingWindow",
     )
 
     parser.add_argument(
-        "--sliding-window-health-trend-sink",
-        default="gs://print-nanny-sandbox/dataflow/telemetry_event/sliding_window/health/trend/",
-        help="Files will be output to this gcs bucket",
+        "--session-window-health-trend-sink",
+        default="gs://print-nanny-sandbox/dataflow/telemetry_event/session_window/WindowedHealthDataFrames",
+        help="Post-filtered WindowedHelathDataframe emitted from session window",
     )
 
     parser.add_argument(

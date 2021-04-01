@@ -45,8 +45,6 @@ def health_score_trend_polynomial_v1(
             fill_value=0,
         )
     )
-
-    logger.info(f"Calculating polyfit with degree={degree} on df: \n {xy}")
     trend = np.polynomial.polynomial.Polynomial.fit(xy.index, xy, degree)
     return xy, trend
 
@@ -236,6 +234,7 @@ class MonitorHealthStateful(beam.DoFn):
         # @TODO write pyarrow schema instead of inferring it here
         # table = pa.Table.from_pydict(element.to_dict())
 
+        logger.info(f"Current WindowedHealthDataFrames {value}")
         yield key, value
 
         # if this is the last window pane in session, begin video rendering
