@@ -1,11 +1,16 @@
-from typing import Tuple, Dict, Any, NamedTuple
+from __future__ import annotations
+import json
+
+from typing import Tuple, Dict, Any, NamedTuple, TypeVar, Generic
 import pandas as pd
 import numpy as np
 import nptyping as npt
 import tensorflow as tf
 from tensorflow_transform.tf_metadata import schema_utils
 from tensorflow_transform.tf_metadata import dataset_metadata
+from tensorflow_metadata.proto.v0 import schema_pb2
 
+from apache_beam.pvalue import PCollection
 import pyarrow as pa
 from print_nanny_client.telemetry_event import TelemetryEvent
 
@@ -33,56 +38,157 @@ POSITIVE_LABELS = {
 }
 
 
-class Image(NamedTuple):
-    height: int
-    width: int
-    data: bytes
-    # ndarray: np.ndarray
+class Metadata(NamedTuple):
+    client_version: str
+    session: str
+    user_id: int
+    device_id: int
+    device_cloudiot_id: int
+    window_start: int
+    window_end: int
+
+    @staticmethod
+    def pyarrow_fields():
+        return [
+            ("client_version", pa.string()),
+            ("session", pa.string()),
+            ("user_id", pa.int32()),
+            ("device_id", pa.int32()),
+            ("device_cloudiot_id", pa.int64()),
+            ("window_start", pa.int64()),
+            ("window_end", pa.int64()),
+        ]
+
+    @classmethod
+    def pyarrow_struct(cls):
+        return pa.struct(cls.pyarrow_fields())
+
+    @classmethod
+    def pyarrow_schema():
+        return pa.schema(cls.pyarrow_fields())
 
 
-class Box(NamedTuple):
-    detection_score: npt.Float32
-    detection_class: npt.Int32
-    ymin: npt.Float32
-    xmin: npt.Float32
-    ymax: npt.Float32
-    xmax: npt.Float32
+class PendingAlert(NamedTuple):
+    session: str
+    metadata: Metadata
+
+    def to_json(self):
+        return json.dumps(self._asdict())
+
+    def to_bytes(self):
+        return self.to_json().encode("utf-8")
+
+    @staticmethod
+    def pyarrow_fields():
+        return [
+            ("session", pa.string()),
+            ("metadata", Metadata.pyarrow_struct()),
+        ]
+
+    @classmethod
+    def pyarrow_struct(cls):
+        return pa.struct(cls.pyarrow_fields)
+
+    @classmethod
+    def pyarrow_schema():
+        return pa.schema(cls.pyarrow_fields)
 
 
-class BoundingBoxAnnotation(NamedTuple):
-    num_detections: int
-    detection_scores: np.ndarray
-    detection_boxes: np.ndarray
-    detection_classes: np.ndarray
+class HealthTrend(NamedTuple):
+    coef: npt.NDArray[npt.Float32]
+    domain: npt.NDArray[npt.Float32]
+    window: npt.NDArray[npt.Float32]
+    roots: npt.NDArray[npt.Float32]
+    degree: int
+
+    @staticmethod
+    def pyarrow_schema(self):
+        return pa.schema(
+            [
+                ("coef", pa.list_(pa.float32())),
+                ("domain", pa.list_(pa.float32())),
+                ("window", pa.list_(pa.float32())),
+                ("roots", pa.list_(pa.float32())),
+                ("degree", pa.int32),
+            ]
+        )
 
 
-class MonitoringFrame(NamedTuple):
-    ts: int
-    image: Image
-    bounding_boxes: BoundingBoxAnnotation = None
+class WindowedHealthDataFrames(NamedTuple):
+    session: str
+    record_df: pd.DataFrame
+    cumsum: pd.DataFrame
+    trend: np.polynomial.polynomial.Polynomial
+    metadata: Metadata
+    failure_count: int = 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return self._asdict()
+
+    def with_failure_count(self, failure_count: int):
+        _kwargs = self.to_dict()
+        _kwargs.update(dict(failure_count=failure_count))
+        return self.__class__(**_kwargs)
+
+    # @TODO currently inferred using pandas
+    @staticmethod
+    def pyarrow_record_df_struct():
+        return pa.struct(
+            [
+                [
+                    ("ts", pa.int64()),
+                    ("session", pa.string()),
+                    ("health_score", pa.float32()),
+                    ("health_weight", pa.float32()),
+                    ("detection_class", pa.int32()),
+                    ("detection_score", pa.float32()),
+                ]
+            ]
+        )
+
+    @staticmethod
+    def pyarrow_fields():
+        return [
+            ("session", pa.string()),
+            ("metadata", Metadata.pyarrow_struct()),
+            (
+                "record_df",
+                pa.struct(
+                    [
+                        [
+                            ("ts", pa.int64()),
+                            ("session", pa.string()),
+                            ("health_score", pa.float32()),
+                            ("health_weight", pa.float32()),
+                            ("detection_class", pa.int32()),
+                            ("detection_score", pa.float32()),
+                        ]
+                    ]
+                ),
+            ),
+            ("cumsum", pa.list_(pa.float32())),
+            ("failure_count", pa.int64()),
+            ("trend", HealthTrend.pyarrow_schema()),
+        ]
+
+    # @classmethod
+    # def pyarrow_struct(cls):
+    #     return pa.struct(cls.pyarrow_fields)
+
+    @classmethod
+    def pyarrow_schema(cls):
+        return pa.schema(cls.pyarrow_fields)
 
 
 class WindowedHealthRecord(NamedTuple):
-    """
-    Many FlatTelemetryEvent : 1 Monitoring Frame
-    """
 
     ts: int
-    client_version: str
     session: str
-
-    # Metadata
-    user_id: npt.Float32
-    device_id: npt.Float32
-    device_cloudiot_id: npt.Float32
-
+    metadata: Metadata
     health_score: npt.Float32
-    health_multiplier: npt.Float32
+    health_weight: npt.Float32
     detection_score: npt.Float32
     detection_class: npt.Int32
-
-    window_start: int
-    window_end: int
 
     def to_dict(self) -> Dict[str, Any]:
         return self._asdict()
@@ -91,25 +197,67 @@ class WindowedHealthRecord(NamedTuple):
         return pd.DataFrame(self.to_dict(), index=["ts", "detection_class"])
 
     @staticmethod
-    def records_to_health_dataframe(records) -> pd.DataFrame:
-        data = {
-            "ts": self.ts,
-            "detection_class": self.detection_classes,
-            "detection_score": self.detection_scores,
-            "window_start": window_start,
-            "window_end": window_end,
-            "session": self.session,
-            "user_id": self.user_id,
-            "device_id": self.device_id,
-        }
-        df = (
-            pd.DataFrame.from_records([data])
-            .set_index("ts")
-            .apply(pd.Series.explode)
-            .reset_index()
+    def pyarrow_schema():
+        return pa.schema(
+            [
+                ("ts", pa.int64()),
+                ("session", pa.string()),
+                ("metadata", Metadata.pyarrow_struct()),
+                ("health_score", pa.float32()),
+                ("health_weight", pa.float32()),
+                ("detection_class", pa.int32()),
+                ("detection_score", pa.float32()),
+            ]
         )
 
-        return df.set_index(["ts", "detection_class"])
+
+class DeviceCalibration(NamedTuple):
+    coordinates: npt.NDArray[npt.Float32]
+    mask = npt.NDArray[npt.Bool]
+    fpm = int
+
+    def filter_event(
+        self, event: "NestedTelemetryEvent", min_overlap_area: float = 0.75
+    ):
+        percent_intersection = self.percent_intersection(self.coordinates)
+        ignored_mask = percent_intersection <= min_overlap_area
+
+        detection_boxes = self.detection_boxes()
+        included_mask = np.invert(ignored_mask)
+        detection_boxes = np.squeeze(detection_boxes[included_mask])
+        detection_scores = np.squeeze(self.detection_scores[included_mask])
+        detection_classes = np.squeeze(self.detection_classes[included_mask])
+
+        num_detections = int(np.count_nonzero(included_mask))
+
+        filter_fields = [
+            "detection_scores",
+            "detection_classes",
+            "boxes_ymin",
+            "boxes_xmin",
+            "boxes_ymax",
+            "boxes_xmax",
+            "num_detections",
+        ]
+        default_fieldset = {
+            k: v for k, v in self.to_dict().items() if k not in filter_fields
+        }
+        boxes_ymin, boxes_xmin, boxes_ymax, boxes_xmax = detection_boxes.T
+
+        _kwargs = self.to_dict()
+        _kwargs.update(
+            dict(
+                detection_scores=detection_scores,
+                detection_classes=detection_classes,
+                num_detections=num_detections,
+                boxes_ymin=boxes_ymin,
+                boxes_xmin=boxes_xmin,
+                boxes_ymax=boxes_ymax,
+                boxes_xmax=boxes_xmax,
+                calibration=self,
+            )
+        )
+        return NestedTelemetryEvent.__class__(**_kwargs)
 
 
 class NestedTelemetryEvent(NamedTuple):
@@ -119,14 +267,12 @@ class NestedTelemetryEvent(NamedTuple):
 
     ts: int
     client_version: str
-    event_type: int
-    event_data_type: int
     session: str
 
     # Metadata
-    user_id: npt.Float32
-    device_id: npt.Float32
-    device_cloudiot_id: npt.Float32
+    user_id: int
+    device_id: int
+    device_cloudiot_id: int
 
     # BoundingBoxes
     detection_scores: npt.NDArray[npt.Float32]
@@ -140,47 +286,37 @@ class NestedTelemetryEvent(NamedTuple):
     # Image
     image_width: npt.Float32
     image_height: npt.Float32
-    image_data: tf.Tensor = None
+    image_data: bytes = None
     image_tensor: tf.Tensor = None
+    calibration: DeviceCalibration = None
+    annotated_image_data: bytes = None
 
     @staticmethod
     def pyarrow_schema(num_detections):
         return pa.schema(
             [
-                pa.field(
-                    "boxes_xmax", pa.list_(pa.float32(), list_size=num_detections)
-                ),
-                pa.field(
-                    "boxes_xmin", pa.list_(pa.float32(), list_size=num_detections)
-                ),
-                pa.field(
-                    "boxes_ymax", pa.list_(pa.float32(), list_size=num_detections)
-                ),
-                pa.field(
-                    "boxes_ymin", pa.list_(pa.float32(), list_size=num_detections)
-                ),
-                pa.field("client_version", pa.string()),
-                pa.field(
-                    "detection_classes", pa.list_(pa.int32(), list_size=num_detections)
-                ),
-                pa.field(
-                    "detection_scores", pa.list_(pa.float32(), list_size=num_detections)
-                ),
-                pa.field("device_cloudiot_id", pa.int32()),
-                pa.field("device_id", pa.int32()),
-                pa.field("event_data_type", pa.string()),
-                pa.field("event_type", pa.string()),
-                pa.field("image_data", pa.binary()),
-                pa.field("image_height", pa.int32()),
-                pa.field("image_width", pa.int32()),
-                pa.field("num_detections", pa.int32()),
-                pa.field("ts", pa.int32()),
-                pa.field("user_id", pa.int32()),
+                ("ts", pa.int64()),
+                ("client_version", pa.string()),
+                ("session", pa.string()),
+                ("user_id", pa.int32()),
+                ("boxes_xmax", pa.list_(pa.float32(), list_size=num_detections)),
+                ("boxes_xmin", pa.list_(pa.float32(), list_size=num_detections)),
+                ("boxes_ymax", pa.list_(pa.float32(), list_size=num_detections)),
+                ("boxes_ymin", pa.list_(pa.float32(), list_size=num_detections)),
+                ("detection_classes", pa.list_(pa.int32(), list_size=num_detections)),
+                ("detection_scores", pa.list_(pa.float32(), list_size=num_detections)),
+                ("device_cloudiot_id", pa.int64()),
+                ("device_id", pa.int32()),
+                ("image_data", pa.binary()),
+                ("annotated_image_data", pa.binary()),
+                ("image_height", pa.int32()),
+                ("image_width", pa.int32()),
+                ("num_detections", pa.int32()),
             ]
         )
 
     @staticmethod
-    def tf_feature_spec(num_detections):
+    def tfrecord_schema(num_detections: int) -> schema_pb2.Schema:
         return schema_utils.schema_from_feature_spec(
             {
                 "boxes_xmax": tf.io.FixedLenFeature([num_detections], tf.float32),
@@ -192,21 +328,20 @@ class NestedTelemetryEvent(NamedTuple):
                 "detection_scores": tf.io.FixedLenFeature([num_detections], tf.float32),
                 "device_cloudiot_id": tf.io.FixedLenFeature([], tf.int64),
                 "device_id": tf.io.FixedLenFeature([], tf.int64),
-                "event_data_type": tf.io.FixedLenFeature([], tf.int64),
-                "event_type": tf.io.FixedLenFeature([], tf.int64),
                 "image_data": tf.io.FixedLenFeature([], tf.string),
                 "image_height": tf.io.FixedLenFeature([], tf.int64),
                 "image_width": tf.io.FixedLenFeature([], tf.int64),
                 "num_detections": tf.io.FixedLenFeature([], tf.float32),
                 "session": tf.io.FixedLenFeature([], tf.string),
-                "ts": tf.io.FixedLenFeature([], tf.float32),
+                "ts": tf.io.FixedLenFeature([], tf.int64),
                 "user_id": tf.io.FixedLenFeature([], tf.int64),
             }
         )
 
-    @staticmethod
-    def tfrecord_metadata(tf_feature_spec):
-        return dataset_metadata.DatasetMetadata(tf_feature_spec)
+    @classmethod
+    def tfrecord_metadata(cls, num_detections: int) -> DatasetMetadata:
+        schema = cls.tfrecord_schema(num_detections)
+        return dataset_metadata.DatasetMetadata(schema)
 
     @classmethod
     def from_flatbuffer(cls, input_bytes):
@@ -236,8 +371,6 @@ class NestedTelemetryEvent(NamedTuple):
             ts=obj.metadata.ts,
             session=obj.metadata.session.decode("utf-8"),
             client_version=obj.metadata.clientVersion.decode("utf-8"),
-            event_type=obj.eventType,
-            event_data_type=obj.eventDataType,
             image_height=obj.eventData.image.height,
             image_width=obj.eventData.image.width,
             image_tensor=tf.expand_dims(tf.io.decode_jpeg(image_data), axis=0),
@@ -366,40 +499,3 @@ class NestedTelemetryEvent(NamedTuple):
         return np.array(
             [self.boxes_ymin, self.boxes_xmin, self.boxes_ymax, self.boxes_xmax]
         ).T
-
-    def calibration_filter(self, aoi_coords, min_overlap_area: float = 0.75):
-
-        percent_intersection = self.percent_intersection(aoi_coords)
-        ignored_mask = percent_intersection <= min_overlap_area
-
-        detection_boxes = self.detection_boxes()
-        included_mask = np.invert(ignored_mask)
-        detection_boxes = np.squeeze(detection_boxes[included_mask])
-        detection_scores = np.squeeze(self.detection_scores[included_mask])
-        detection_classes = np.squeeze(self.detection_classes[included_mask])
-
-        num_detections = int(np.count_nonzero(included_mask))
-
-        filter_fields = [
-            "detection_scores",
-            "detection_classes",
-            "boxes_ymin",
-            "boxes_xmin",
-            "boxes_ymax",
-            "boxes_xmax",
-            "num_detections",
-        ]
-        default_fieldset = {
-            k: v for k, v in self.to_dict().items() if k not in filter_fields
-        }
-        boxes_ymin, boxes_xmin, boxes_ymax, boxes_xmax = detection_boxes.T
-        return self.__class__(
-            detection_scores=detection_scores,
-            detection_classes=detection_classes,
-            num_detections=num_detections,
-            boxes_ymin=boxes_ymin,
-            boxes_xmin=boxes_xmin,
-            boxes_ymax=boxes_ymax,
-            boxes_xmax=boxes_xmax,
-            **default_fieldset
-        )

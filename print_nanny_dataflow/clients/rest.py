@@ -58,12 +58,21 @@ class RestAPIClient:
         max_time=MAX_BACKOFF_TIME,
         jitter=backoff.random_jitter,
     )
-    async def create_defect_alert(self, octoprint_device_id, **kwargs):
-        async with AsyncApiClient(self._api_config) as api_client:
+    async def create_defect_alert(self, **kwargs):
+        async with print_nanny_client.ApiClient(self._api_config) as api_client:
             api_instance = print_nanny_client.AlertsApi(api_client=api_client)
 
-            request = print_nanny_client.DefectAlertRequest(
-                octoprint_device=octoprint_device_id, **kwargs
-            )
-            defect_alert = await api_instance.defect_alerts_create(request)
+            request = print_nanny_client.CreateDefectAlertRequest(**kwargs)
+            defect_alert = await api_instance.defect_alert_create(request)
             return defect_alert
+
+    @backoff.on_exception(
+        backoff.expo,
+        aiohttp.ClientConnectionError,
+        max_time=MAX_BACKOFF_TIME,
+        jitter=backoff.random_jitter,
+    )
+    async def get_print_session(self, print_session):
+        async with print_nanny_client.ApiClient(self._api_config) as api_client:
+            api_instance = print_nanny_client.RemoteControlApi(api_client=api_client)
+            return await api_instance.print_sessions_retrieve(print_session)
