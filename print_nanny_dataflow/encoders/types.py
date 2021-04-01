@@ -38,15 +38,39 @@ POSITIVE_LABELS = {
 }
 
 
-class PendingAlert(NamedTuple):
+class Metadata(NamedTuple):
     client_version: str
     session: str
-    file_pattern: str
     user_id: int
     device_id: int
     device_cloudiot_id: int
     window_start: int
     window_end: int
+
+    @staticmethod
+    def pyarrow_fields():
+        return [
+            ("client_version", pa.string()),
+            ("session", pa.string()),
+            ("user_id", pa.int32()),
+            ("device_id", pa.int32()),
+            ("device_cloudiot_id", pa.int64()),
+            ("window_start", pa.int64()),
+            ("window_end", pa.int64()),
+        ]
+
+    @classmethod
+    def pyarrow_struct(cls):
+        return pa.struct(cls.pyarrow_fields)
+
+    @classmethod
+    def pyarrow_schema():
+        return pa.schema(cls.pyarrow_fields)
+
+
+class PendingAlert(NamedTuple):
+    session: str
+    metadata: Metadata
 
     def to_json(self):
         return json.dumps(self._asdict())
@@ -54,9 +78,52 @@ class PendingAlert(NamedTuple):
     def to_bytes(self):
         return self.to_json().encode("utf-8")
 
+    @staticmethod
+    def pyarrow_fields():
+        return [
+            ("session", pa.string()),
+            ("metadata", Metadata.pyarrow_struct()),
+        ]
+
     @classmethod
-    def from_bytes(cls, b: bytes):
-        return cls(**json.loads(b.decode("utf-8")))
+    def pyarrow_struct(cls):
+        return pa.struct(cls.pyarrow_fields)
+
+    @classmethod
+    def pyarrow_schema():
+        return pa.schema(cls.pyarrow_fields)
+
+
+class WindowedHealthDataFrame(NamedTuple):
+    session: str
+    record_df: pd.DataFrame
+    cumsum_df: pd.DataFrame
+    trend: np.polynomial.polynomial.Polynomial
+    metadata: Metadata
+    failure_count: int = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return self._asdict()
+
+    def with_failure_count(self, failure_count: int):
+        return self.__class__(failure_count=failure_count, **self.to_dict())
+
+    # @TODO currently inferred using pandas
+
+    # @staticmethod
+    # def pyarrow_fields():
+    #     return [
+    #         ("session", pa.string()),
+    #         ("metadata", Metadata.pyarrow_struct()),
+    #     ]
+
+    # @classmethod
+    # def pyarrow_struct(cls):
+    #     return pa.struct(cls.pyarrow_fields)
+
+    # @classmethod
+    # def pyarrow_schema():
+    #     return pa.schema(cls.pyarrow_fields)
 
 
 class WindowedHealthRecord(NamedTuple):
@@ -64,19 +131,11 @@ class WindowedHealthRecord(NamedTuple):
     ts: int
     client_version: str
     session: str
-
-    # Metadata
-    user_id: int
-    device_id: int
-    device_cloudiot_id: int
-
+    metadata = Metadata
     health_score: npt.Float32
     health_weight: npt.Float32
     detection_score: npt.Float32
     detection_class: npt.Int32
-
-    window_start: int
-    window_end: int
 
     def to_dict(self) -> Dict[str, Any]:
         return self._asdict()

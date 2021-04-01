@@ -6,12 +6,15 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 import apache_beam as beam
+from apache_beam.dataframe.transforms import DataframeTransform
 
 from print_nanny_dataflow.encoders.types import (
     NestedTelemetryEvent,
     WindowedHealthRecord,
+    WindowedHealthDataFrame,
     DeviceCalibration,
     PendingAlert,
+    Metadata,
 )
 
 logger = logging.getLogger(__name__)
@@ -29,7 +32,7 @@ CATEGORY_INDEX = {
 
 def health_score_trend_polynomial_v1(
     df: pd.DataFrame, degree=1
-) -> np.polynomial.polynomial.Polynomial:
+) -> Tuple[pd.DataFrame, np.polynomial.polynomial.Polynomial]:
     """
     Takes a pandas DataFrame of WindowedHealthRecords and returns a polynormial fit to degree
     """
@@ -45,7 +48,7 @@ def health_score_trend_polynomial_v1(
 
     logger.info(f"Calculating polyfit with degree={degree} on df: \n {xy}")
     trend = np.polynomial.polynomial.Polynomial.fit(xy.index, xy, degree)
-    return trend
+    return xy, trend
 
 
 def predict_bounding_boxes(element: NestedTelemetryEvent, model_path: str):
@@ -86,46 +89,44 @@ def predict_bounding_boxes(element: NestedTelemetryEvent, model_path: str):
 class ExplodeWindowedHealthRecord(beam.DoFn):
     def process(
         self,
-        keyed_element: Tuple[Any, NestedTelemetryEvent],
+        element: NestedTelemetryEvent,
         window=beam.DoFn.WindowParam,
     ) -> Iterable[WindowedHealthRecord]:
-        key, event = keyed_element
         window_start = int(window.start)
         window_end = int(window.end)
 
+        metadata = Metadata(
+            session=element.session,
+            client_version=element.client_version,
+            user_id=element.user_id,
+            device_id=element.device_id,
+            device_cloudiot_id=element.device_cloudiot_id,
+            window_start=element.window_start,
+            window_end=element.window_end,
+        )
         return [
             WindowedHealthRecord(
-                ts=event.ts,
-                session=event.session,
-                client_version=event.client_version,
-                user_id=event.user_id,
-                device_id=event.device_id,
-                device_cloudiot_id=event.device_cloudiot_id,
-                detection_score=event.detection_scores[i],
-                detection_class=event.detection_classes[i],
+                metadata=metadata,
+                ts=element.ts,
+                session=element.session,
+                client_version=element.client_version,
+                user_id=element.user_id,
+                device_id=element.device_id,
+                device_cloudiot_id=element.device_cloudiot_id,
+                detection_score=element.detection_scores[i],
+                detection_class=element.detection_classes[i],
                 window_start=window_start,
                 window_end=window_end,
-                health_weight=CATEGORY_INDEX[event.detection_classes[i]][
+                health_weight=CATEGORY_INDEX[element.detection_classes[i]][
                     "health_weight"
                 ],
-                health_score=CATEGORY_INDEX[event.detection_classes[i]]["health_weight"]
-                * event.detection_scores[i],
+                health_score=CATEGORY_INDEX[element.detection_classes[i]][
+                    "health_weight"
+                ]
+                * element.detection_scores[i],
             )
-            for i in range(0, event.num_detections)
+            for i in range(0, element.num_detections)
         ]
-
-
-class SortedHealthCumsum(beam.DoFn):
-    def process(
-        self,
-        keyed_elements: Tuple[
-            Any, Iterable[WindowedHealthRecord]
-        ] = beam.DoFn.ElementParam,
-    ):
-        key, elements = keyed_elements
-        yield elements | DataframeTransform(
-            lambda df: df.sort_values("ts").groupby(["session", "ts"]).cumsum()
-        )
 
 
 class FilterAreaOfInterest(beam.DoFn):
@@ -140,10 +141,10 @@ class FilterAreaOfInterest(beam.DoFn):
         self.calibration_filename = calibration_filename
 
     def load_calibration(
-        self, event: NestedTelemetryEvent
+        self, element: NestedTelemetryEvent
     ) -> Optional[DeviceCalibration]:
         gcs_client = beam.io.gcp.gcsio.GcsIO()
-        device_id = event.device_id
+        device_id = element.device_id
         device_calibration_path = os.path.join(
             self.calibration_base_path, str(device_id), self.calibration_filename
         )
@@ -158,170 +159,121 @@ class FilterAreaOfInterest(beam.DoFn):
 
     def process(
         self,
-        keyed_elements: Tuple[
-            Any, Iterable[NestedTelemetryEvent]
-        ] = beam.DoFn.ElementParam,
+        keyed_elements=beam.DoFn.ElementParam,
         key=beam.DoFn.KeyParam,
     ) -> Iterable[NestedTelemetryEvent]:
         session, elements = keyed_elements
 
         calibration = self.load_calibration(elements[0])
-
         if calibration:
-            yield beam.Map(lambda event: calibration.filter_event(event))
+            return elements | beam.Map(lambda event: calibration.filter_event(event))
         else:
-            yield elements
+            return elements
 
 
-# class WindowedHealthDataframe(beam.DoFn):
-#     """
-#         Optional Dataframe checkpoint/write for debugging and analysis
-#         @todo this uses pandas.DataFrame as a first pass but beam provides a Dataframe API
-#         https://beam.apache.org/documentation/dsls/dataframes/overview/
-#     """
-#     def __init__(
-#         self,
-#         base_path,
-#         warmup: int=20,
-#     ):
-#         self.base_path = base_path
-#         self.warmup = warmup
+class SortWindowedHealthDataframe(beam.DoFn):
+    """
+    Optional Dataframe checkpoint/write for debugging and analysis
+    @todo this uses pandas.DataFrame as a first pass but beam provides a Dataframe API
+    https://beam.apache.org/documentation/dsls/dataframes/overview/
+    """
 
-#     def process(
-#         self,
-#         keyed_elements: Tuple[Any, Iterable[WindowedHealthRecord]] = beam.DoFn.ElementParam,
-#         window=beam.DoFn.WindowParam,
-#     ) -> Iterable[bytes]:
-#         session, windowed_health_records = keyed_elements
-
-#         window_start = int(window.start)
-#         window_end = int(window.end)
-#         output_path = os.path.join(
-#             self.checkpoint_sink, session, f"{window_start}_{window_end}.parquet"
-#         )
-#         df = (
-#             pd.DataFrame(data=windowed_health_records)
-#             .sort_values("ts")
-#             .set_index(["ts"])
-#         )
-#         df.to_parquet(output_path, engine="pyarrow")
-
-#         yield
-#         n_frames = len(df.index.unique())
-#         window_start = int(window.start)
-#         window_end = int(window.end)
-#         if n_frames <= self.warmup:
-#             logger.warning(
-#                 f"Ignoring CalcHealthScoreTrend called with n_frames={n_frames} warmup={self.warmup} session={session} window=({window_start}_{window_end})"
-#             )
-#             return
-
-#         trend = health_score_trend_polynomial_v1(df, degree=self.polyfit_degree)
-
-#         should_alert = self.should_alert(session, trend)
-#         logger.info(f"should_alert={should_alert} for trend={trend}")
-#         if should_alert:
-#             file_pattern = os.path.join(self.parquet_sink, session, "*")
-#             sample_event = windowed_health_records[0]
-
-#             pending_alert = PendingAlert(
-#                 session=session,
-#                 client_version=sample_event.client_version,
-#                 user_id=sample_event.user_id,
-#                 device_id=sample_event.device_id,
-#                 device_cloudiot_id=sample_event.device_cloudiot_id,
-#                 window_start=sample_event.window_start,
-#                 window_end=sample_event.window_end,
-#                 file_pattern=file_pattern,
-#             )
-#             yield pending_alert.to_bytes()
-
-
-class WindowedHealthScore(beam.DoFn):
-    def __init__(
-        self,
-        checkpoint_sink,
-        parquet_sink,
-        render_video_topic,
-        window_size,
-        window_period,
-        output_path=None,
-        health_threshold=3,
-        polyfit_degree=1,
-        warmup=20,
-    ):
-        self.output_path
-        self.render_video_topic = render_video_topic
-        self.window_size = window_size
-        self.window_period = window_period
-        self.warmup = warmup
-        self.api_url = api_url
-        self.api_token = api_token
-
-    async def should_alert_async(self, session: str) -> bool:
-        rest_client = RestAPIClient(api_token=self.api_token, api_url=self.api_url)
-
-        print_session = await rest_client.get_print_session(
-            print_session=session,
-        )
-        return print_session.supress_alerts is False
-
-    def should_alert(
-        self, session: str, trend: np.polynomial.polynomial.Polynomial
-    ) -> bool:
-        slope, intercept = tuple(trend)
-        if slope < 0:
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-            return loop.run_until_complete(self.should_alert_async(session))
-        return False
+    def __init__(self, polyfit_degree=1):
+        self.polyfit_degree = 1
 
     def process(
         self,
-        keyed_elements: Tuple[Any, Iterable[NamedTuple]] = beam.DoFn.ElementParam,
+        keyed_elements: Tuple[
+            Any, Iterable[WindowedHealthRecord]
+        ] = beam.DoFn.ElementParam,
         window=beam.DoFn.WindowParam,
-    ) -> Iterable[bytes]:
+    ) -> Iterable[WindowedHealthDataFrame]:
         session, windowed_health_records = keyed_elements
 
         window_start = int(window.start)
         window_end = int(window.end)
-        output_path = os.path.join(
-            self.checkpoint_sink, session, f"{window_start}_{window_end}.parquet"
-        )
         df = (
             pd.DataFrame(data=windowed_health_records)
             .sort_values("ts")
             .set_index(["ts"])
         )
-        df.to_parquet(output_path, engine="pyarrow")
-        n_frames = len(df.index.unique())
-        window_start = int(window.start)
-        window_end = int(window.end)
-        if n_frames <= self.warmup:
-            logger.warning(
-                f"Ignoring CalcHealthScoreTrend called with n_frames={n_frames} warmup={self.warmup} session={session} window=({window_start}_{window_end})"
-            )
-            return
 
-        trend = health_score_trend_polynomial_v1(df, degree=self.polyfit_degree)
+        # yield
+        # n_frames = len(df.index.unique())
+        # window_start = int(window.start)
+        # window_end = int(window.end)
+        # if n_frames <= self.warmup:
+        #     logger.warning(
+        #         f"Ignoring CalcHealthScoreTrend called with n_frames={n_frames} warmup={self.warmup} session={session} window=({window_start}_{window_end})"
+        #     )
+        #     return
 
-        should_alert = self.should_alert(session, trend)
-        logger.info(f"should_alert={should_alert} for trend={trend}")
-        if should_alert:
-            file_pattern = os.path.join(self.parquet_sink, session, "*")
-            sample_event = windowed_health_records[0]
+        cumsum_df, trend = health_score_trend_polynomial_v1(
+            df, degree=self.polyfit_degree
+        )
+        metadata = df.iloc[0]["metadata"]
+        record_df = df.drop(columns=[metadata._fields])
+        yield WindowedHealthDataFrame(
+            session=session,
+            trend=trend,
+            record_df=record_df,
+            cumsum_df=cumsum_df,
+            window_start=window_start,
+            window_end=window_end,
+        )
+        # yield
+        # should_alert = self.should_alert(session, trend)
+        # logger.info(f"should_alert={should_alert} for trend={trend}")
+        # if should_alert:
+        #     file_pattern = os.path.join(self.parquet_sink, session, "*")
+        #     sample_event = windowed_health_records[0]
 
+        #     pending_alert = PendingAlert(
+        #         session=session,
+        #         client_version=sample_element.client_version,
+        #         user_id=sample_element.user_id,
+        #         device_id=sample_element.device_id,
+        #         device_cloudiot_id=sample_element.device_cloudiot_id,
+        #         window_start=sample_element.window_start,
+        #         window_end=sample_element.window_end,
+        #         file_pattern=file_pattern,
+        #     )
+        #     yield pending_alert.to_bytes()
+
+
+class MonitorHealthStateful(beam.DoFn):
+    def __init__(self, pubsub_topic, failure_threshold=2, quiet=True):
+        self.failure_threshold = failure_threshold
+        self.pubsub_topic = pubsub_topic
+        self.quiet = quiet
+
+    FAILURES = beam.transforms.userstate.CombiningValueStateSpec("failures", sum)
+
+    def process(
+        self,
+        element: WindowedHealthDataFrame,
+        pane_info=beam.DoFn.PaneInfoParam,
+        failures=beam.DoFn.StateParam(FAILURES),
+    ) -> Iterable[WindowedHealthDataFrame]:
+        key, value = element
+
+        slope, intercept = WindowedHealthDataFrame.trend
+        if slope < 0:
+            failures.add(1)
+
+        current_failures = failures.read()
+        element = element.with_failure_count(current_failures)
+        # @TODO analyze production distribution and write alert behavior
+
+        # @TODO write pyarrow schema instead of inferring it here
+        table = pa.Table.from_pydict(element.to_dict())
+
+        yield table.schema, element
+
+        # if this is the last window pane in session, begin video rendering
+        if pane_info.is_last:
             pending_alert = PendingAlert(
-                session=session,
-                client_version=sample_event.client_version,
-                user_id=sample_event.user_id,
-                device_id=sample_event.device_id,
-                device_cloudiot_id=sample_event.device_cloudiot_id,
-                window_start=sample_event.window_start,
-                window_end=sample_event.window_end,
-                file_pattern=file_pattern,
+                metadata=element.metadata,
+                session=key,
             )
-            yield pending_alert.to_bytes()
+            pending_alert | beam.WriteToPubSub(self.pubsub_topic)

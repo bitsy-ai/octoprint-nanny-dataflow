@@ -40,14 +40,14 @@ from print_nanny_dataflow.transforms.health import (
     predict_bounding_boxes,
     health_score_trend_polynomial_v1,
     FilterAreaOfInterest,
-    SortedHealthCumsum,
+    SortWindowedHealthDataframe,
 )
 
 from print_nanny_dataflow.encoders.types import (
     NestedTelemetryEvent,
     WindowedHealthRecord,
     DeviceCalibration,
-    PendingAlert,
+    WindowedHealthDataFrame,
 )
 
 from print_nanny_dataflow.utils.visualization import (
@@ -150,7 +150,7 @@ def run_pipeline(args, pipeline_args):
         )
 
         sliding_window_view = (
-            parsed_dataset_by_session
+            parsed_dataset
             | "Add sliding window"
             >> beam.WindowInto(
                 beam.transforms.window.SlidingWindows(
@@ -170,7 +170,7 @@ def run_pipeline(args, pipeline_args):
             | "Write SlidingWindow Parquet"
             >> beam.ParDo(
                 WriteWindowedParquet(
-                    args.sliding_window_health_dataframe_sink,
+                    args.sliding_window_health_raw_sink,
                     WindowedHealthRecord.pyarrow_schema(),
                 )
             )
@@ -178,48 +178,34 @@ def run_pipeline(args, pipeline_args):
 
         # @TODO enrich pcol with calibration as side input to avoid group/transform/regroup?
 
-        alert_pipeline = (
+        windowed_health_dataframe = (
             sliding_window_view
+            | "Drop image data" >> beam.Map(lambda v: v.drop_image_data())
+            | "Group alert pipeline by session" >> beam.GroupBy("session")
             | "Filter detections below threshold & outside area of interest"
-            >> beam.GroupByKey()
-            | beam.ParDo(
+            >> beam.ParDo(
                 FilterAreaOfInterest(args.calibration_base_path, score_threshold=0.5)
             )
-            | beam.Map(lambda x: (x.session, x))
             | beam.ParDo(ExplodeWindowedHealthRecord())
             | beam.GroupBy("session")
-            | beam.ParDo(SortedHealthCumsum())
-            | beam.Map(print)
+            | "Windowed health DataFrame" >> beam.ParDo(SortWindowedHealthDataframe())
         )
 
-        # FilterAreaOfInterest(args.calibration_base_path, score_threshold=0.5)
+        _ = windowed_health_dataframe | WriteWindowedParquet(
+            args.sliding_window_health_trend_sink,
+            NestedTelemetryEvent.pyarrow_schema(args.num_detections),
+        )
 
-        # output_topic = os.path.join(
-        #     "projects", args.project, "topics", args.render_video_topic
-        # )
-        # windowed_health_pcol = (
-        #     sliding_windobeam.GroupBy("session")w_view
-
-        # | "Flatten remaining observations in NestedTelemetryEvent"
-        # >> beam.ParDo(ExplodeWindowedHealthRecord()) | beam.Map(print)
-        # | "Calc cumulative health score sum" >> DataframeTransform(lambda df: df.sort_values("ts").groupby(["session", "ts"]).cumsum())
-
-        # with with beam.dataframe.allow_non_parallel_operations(True)
-        # | "Calculate health score trend and publish alerts"
-        # >> beam.ParDo(
-        #     CheckpointHealthScoreTrend(
-        #         args.health_checkpoint_sink,
-        #         args.parquet_sink,
-        #         args.render_video_topic,
-        #         args.health_window_size,
-        #         args.health_window_period,
-        #         args.api_url,
-        #         args.api_token,
-        #     )
-        # )
-        # | "Publish PendingAlert messages to PubSub"
-        # >> beam.io.WriteToPubSub(output_topic)
-        # )
+        alert_pipeline = (
+            windowed_health_dataframe
+            | beam.WindowInto(
+                beam.transforms.window.Session(args.health_window_period * 2),
+                trigger=beam.transforms.trigger.AfterCount(1),
+            )
+            | "Stateful health score threshold monitor" >> MonitorHealthStateful()
+            | "Write health state to parquet"
+            >> WriteWindowedParquet(WindowedHealthDataFrame.pyarrow_schema())
+        )
 
 
 if __name__ == "__main__":
@@ -232,6 +218,12 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--topic",
+        default="monitoring-frame-raw",
+        help="PubSub topic",
+    )
+
+    parser.add_argument(
+        "--session-window-gap-size",
         default="monitoring-frame-raw",
         help="PubSub topic",
     )
@@ -267,8 +259,14 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--sliding-window-health-dataframe-sink",
-        default="gs://print-nanny-sandbox/dataflow/telemetry_event/sliding_window/health",
+        "--sliding-window-health-records-sink",
+        default="gs://print-nanny-sandbox/dataflow/telemetry_event/sliding_window/health/raw/",
+        help="Files will be output to this gcs bucket",
+    )
+
+    parser.add_argument(
+        "--sliding-window-health-trend-sink",
+        default="gs://print-nanny-sandbox/dataflow/telemetry_event/sliding_window/health/trend/",
         help="Files will be output to this gcs bucket",
     )
 
