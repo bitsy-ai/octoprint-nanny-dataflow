@@ -41,13 +41,14 @@ from print_nanny_dataflow.transforms.health import (
     health_score_trend_polynomial_v1,
     FilterAreaOfInterest,
     SortWindowedHealthDataframe,
+    MonitorHealthStateful,
 )
 
 from print_nanny_dataflow.encoders.types import (
     NestedTelemetryEvent,
     WindowedHealthRecord,
     DeviceCalibration,
-    WindowedHealthDataFrame,
+    WindowedHealthDataFrames,
 )
 
 from print_nanny_dataflow.utils.visualization import (
@@ -191,20 +192,28 @@ def run_pipeline(args, pipeline_args):
             | "Windowed health DataFrame" >> beam.ParDo(SortWindowedHealthDataframe())
         )
 
-        _ = windowed_health_dataframe | WriteWindowedParquet(
-            args.sliding_window_health_trend_sink,
-            NestedTelemetryEvent.pyarrow_schema(args.num_detections),
+        _ = (
+            windowed_health_dataframe
+            | "Write health trend parquet" >> beam.GroupBy("session")
+            | beam.ParDo(
+                WriteWindowedParquet(
+                    args.sliding_window_health_trend_sink,
+                    NestedTelemetryEvent.pyarrow_schema(args.num_detections),
+                )
+            )
         )
 
         alert_pipeline = (
             windowed_health_dataframe
             | beam.WindowInto(
-                beam.transforms.window.Session(args.health_window_period * 2),
+                beam.transforms.window.Sessions(args.health_window_period * 2),
                 trigger=beam.transforms.trigger.AfterCount(1),
+                accumulation_mode=beam.transforms.trigger.AccumulationMode.DISCARDING,
             )
-            | "Stateful health score threshold monitor" >> MonitorHealthStateful()
-            | "Write health state to parquet"
-            >> WriteWindowedParquet(WindowedHealthDataFrame.pyarrow_schema())
+            | "Stateful health score threshold monitor"
+            >> beam.ParDo(MonitorHealthStateful(args.render_video_topic))
+            # | "Write health state to parquet"
+            # >> WriteWindowedParquet(WindowedHealthDataFrame.pyarrow_schema())
         )
 
 
@@ -259,7 +268,7 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--sliding-window-health-records-sink",
+        "--sliding-window-health-raw-sink",
         default="gs://print-nanny-sandbox/dataflow/telemetry_event/sliding_window/health/raw/",
         help="Files will be output to this gcs bucket",
     )

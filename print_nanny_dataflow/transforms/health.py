@@ -11,7 +11,7 @@ from apache_beam.dataframe.transforms import DataframeTransform
 from print_nanny_dataflow.encoders.types import (
     NestedTelemetryEvent,
     WindowedHealthRecord,
-    WindowedHealthDataFrame,
+    WindowedHealthDataFrames,
     DeviceCalibration,
     PendingAlert,
     Metadata,
@@ -101,22 +101,16 @@ class ExplodeWindowedHealthRecord(beam.DoFn):
             user_id=element.user_id,
             device_id=element.device_id,
             device_cloudiot_id=element.device_cloudiot_id,
-            window_start=element.window_start,
-            window_end=element.window_end,
+            window_start=window_start,
+            window_end=window_end,
         )
         return [
             WindowedHealthRecord(
                 metadata=metadata,
                 ts=element.ts,
                 session=element.session,
-                client_version=element.client_version,
-                user_id=element.user_id,
-                device_id=element.device_id,
-                device_cloudiot_id=element.device_cloudiot_id,
                 detection_score=element.detection_scores[i],
                 detection_class=element.detection_classes[i],
-                window_start=window_start,
-                window_end=window_end,
                 health_weight=CATEGORY_INDEX[element.detection_classes[i]][
                     "health_weight"
                 ],
@@ -187,8 +181,8 @@ class SortWindowedHealthDataframe(beam.DoFn):
             Any, Iterable[WindowedHealthRecord]
         ] = beam.DoFn.ElementParam,
         window=beam.DoFn.WindowParam,
-    ) -> Iterable[WindowedHealthDataFrame]:
-        session, windowed_health_records = keyed_elements
+    ) -> Tuple[Any, WindowedHealthDataFrames]:
+        key, windowed_health_records = keyed_elements
 
         window_start = int(window.start)
         window_end = int(window.end)
@@ -212,14 +206,13 @@ class SortWindowedHealthDataframe(beam.DoFn):
             df, degree=self.polyfit_degree
         )
         metadata = df.iloc[0]["metadata"]
-        record_df = df.drop(columns=[metadata._fields])
-        yield WindowedHealthDataFrame(
-            session=session,
+        record_df = df.drop(columns=["metadata"], axis=1)
+        yield key, WindowedHealthDataFrames(
+            session=key,
             trend=trend,
             record_df=record_df,
             cumsum_df=cumsum_df,
-            window_start=window_start,
-            window_end=window_end,
+            metadata=metadata
         )
         # yield
         # should_alert = self.should_alert(session, trend)
@@ -251,13 +244,13 @@ class MonitorHealthStateful(beam.DoFn):
 
     def process(
         self,
-        element: WindowedHealthDataFrame,
+        element: WindowedHealthDataFrames,
         pane_info=beam.DoFn.PaneInfoParam,
         failures=beam.DoFn.StateParam(FAILURES),
-    ) -> Iterable[WindowedHealthDataFrame]:
+    ) -> Iterable[WindowedHealthDataFrames]:
         key, value = element
 
-        slope, intercept = WindowedHealthDataFrame.trend
+        slope, intercept = element.trend
         if slope < 0:
             failures.add(1)
 
@@ -266,9 +259,9 @@ class MonitorHealthStateful(beam.DoFn):
         # @TODO analyze production distribution and write alert behavior
 
         # @TODO write pyarrow schema instead of inferring it here
-        table = pa.Table.from_pydict(element.to_dict())
+        # table = pa.Table.from_pydict(element.to_dict())
 
-        yield table.schema, element
+        yield key, element
 
         # if this is the last window pane in session, begin video rendering
         if pane_info.is_last:

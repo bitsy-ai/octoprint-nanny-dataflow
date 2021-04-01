@@ -61,11 +61,11 @@ class Metadata(NamedTuple):
 
     @classmethod
     def pyarrow_struct(cls):
-        return pa.struct(cls.pyarrow_fields)
+        return pa.struct(cls.pyarrow_fields())
 
     @classmethod
     def pyarrow_schema():
-        return pa.schema(cls.pyarrow_fields)
+        return pa.schema(cls.pyarrow_fields())
 
 
 class PendingAlert(NamedTuple):
@@ -94,13 +94,13 @@ class PendingAlert(NamedTuple):
         return pa.schema(cls.pyarrow_fields)
 
 
-class WindowedHealthDataFrame(NamedTuple):
+class WindowedHealthDataFrames(NamedTuple):
     session: str
     record_df: pd.DataFrame
     cumsum_df: pd.DataFrame
     trend: np.polynomial.polynomial.Polynomial
     metadata: Metadata
-    failure_count: int = None
+    failure_count: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return self._asdict()
@@ -129,9 +129,8 @@ class WindowedHealthDataFrame(NamedTuple):
 class WindowedHealthRecord(NamedTuple):
 
     ts: int
-    client_version: str
     session: str
-    metadata = Metadata
+    metadata: Metadata
     health_score: npt.Float32
     health_weight: npt.Float32
     detection_score: npt.Float32
@@ -148,17 +147,12 @@ class WindowedHealthRecord(NamedTuple):
         return pa.schema(
             [
                 ("ts", pa.int64()),
-                ("client_version", pa.string()),
                 ("session", pa.string()),
-                ("user_id", pa.int32()),
+                ("metadata", Metadata.pyarrow_struct()),
                 ("health_score", pa.float32()),
                 ("health_weight", pa.float32()),
-                ("window_start", pa.int64()),
-                ("window_end", pa.int64()),
                 ("detection_class", pa.int32()),
                 ("detection_score", pa.float32()),
-                ("device_cloudiot_id", pa.int64()),
-                ("device_id", pa.int32()),
             ]
         )
 
