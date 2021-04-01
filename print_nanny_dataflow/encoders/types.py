@@ -94,10 +94,30 @@ class PendingAlert(NamedTuple):
         return pa.schema(cls.pyarrow_fields)
 
 
+class HealthTrend(NamedTuple):
+    coef: npt.NDArray[npt.Float32]
+    domain: npt.NDArray[npt.Float32]
+    window: npt.NDArray[npt.Float32]
+    roots: npt.NDArray[npt.Float32]
+    degree: int
+
+    @staticmethod
+    def pyarrow_schema(self):
+        return pa.schema(
+            [
+                ("coef", pa.list_(pa.float32())),
+                ("domain", pa.list_(pa.float32())),
+                ("window", pa.list_(pa.float32())),
+                ("roots", pa.list_(pa.float32())),
+                ("degree", pa.int32),
+            ]
+        )
+
+
 class WindowedHealthDataFrames(NamedTuple):
     session: str
     record_df: pd.DataFrame
-    cumsum_df: pd.DataFrame
+    cumsum: pd.DataFrame
     trend: np.polynomial.polynomial.Polynomial
     metadata: Metadata
     failure_count: int = 0
@@ -109,21 +129,53 @@ class WindowedHealthDataFrames(NamedTuple):
         return self.__class__(failure_count=failure_count, **self.to_dict())
 
     # @TODO currently inferred using pandas
+    @staticmethod
+    def pyarrow_record_df_struct():
+        return pa.struct(
+            [
+                [
+                    ("ts", pa.int64()),
+                    ("session", pa.string()),
+                    ("health_score", pa.float32()),
+                    ("health_weight", pa.float32()),
+                    ("detection_class", pa.int32()),
+                    ("detection_score", pa.float32()),
+                ]
+            ]
+        )
 
-    # @staticmethod
-    # def pyarrow_fields():
-    #     return [
-    #         ("session", pa.string()),
-    #         ("metadata", Metadata.pyarrow_struct()),
-    #     ]
+    @staticmethod
+    def pyarrow_fields():
+        return [
+            ("session", pa.string()),
+            ("metadata", Metadata.pyarrow_struct()),
+            (
+                "record_df",
+                pa.struct(
+                    [
+                        [
+                            ("ts", pa.int64()),
+                            ("session", pa.string()),
+                            ("health_score", pa.float32()),
+                            ("health_weight", pa.float32()),
+                            ("detection_class", pa.int32()),
+                            ("detection_score", pa.float32()),
+                        ]
+                    ]
+                ),
+            ),
+            ("cumsum", pa.list_(pa.float32())),
+            ("failure_count", pa.int64()),
+            ("trend", HealthTrend.pyarrow_schema()),
+        ]
 
     # @classmethod
     # def pyarrow_struct(cls):
     #     return pa.struct(cls.pyarrow_fields)
 
-    # @classmethod
-    # def pyarrow_schema():
-    #     return pa.schema(cls.pyarrow_fields)
+    @classmethod
+    def pyarrow_schema(cls):
+        return pa.schema(cls.pyarrow_fields)
 
 
 class WindowedHealthRecord(NamedTuple):

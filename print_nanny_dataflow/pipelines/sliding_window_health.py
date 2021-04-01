@@ -192,16 +192,16 @@ def run_pipeline(args, pipeline_args):
             | "Windowed health DataFrame" >> beam.ParDo(SortWindowedHealthDataframe())
         )
 
-        _ = (
-            windowed_health_dataframe
-            | "Write health trend parquet" >> beam.GroupBy("session")
-            | beam.ParDo(
-                WriteWindowedParquet(
-                    args.sliding_window_health_trend_sink,
-                    NestedTelemetryEvent.pyarrow_schema(args.num_detections),
-                )
-            )
-        )
+        # _ = (
+        #     windowed_health_dataframe
+        #     | "Write health trend parquet" >> beam.GroupByKey()
+        #     | beam.ParDo(
+        #         WriteWindowedParquet(
+        #             args.sliding_window_health_trend_sink,
+        #             WindowedHealthDataFrames.pyarrow_schema(args.num_detections),
+        #         )
+        #     )
+        # )
 
         alert_pipeline = (
             windowed_health_dataframe
@@ -212,8 +212,13 @@ def run_pipeline(args, pipeline_args):
             )
             | "Stateful health score threshold monitor"
             >> beam.ParDo(MonitorHealthStateful(args.render_video_topic))
-            # | "Write health state to parquet"
-            # >> WriteWindowedParquet(WindowedHealthDataFrame.pyarrow_schema())
+            # | "Write health trend parquet" >> beam.GroupBy("session")
+            # | beam.ParDo(
+            #     WriteWindowedParquet(
+            #         args.sliding_window_health_trend_sink,
+            #         WindowedHealthDataFrames.pyarrow_schema(),
+            #     )
+            # )
         )
 
 

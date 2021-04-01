@@ -172,8 +172,9 @@ class SortWindowedHealthDataframe(beam.DoFn):
     https://beam.apache.org/documentation/dsls/dataframes/overview/
     """
 
-    def __init__(self, polyfit_degree=1):
+    def __init__(self, warmup=2, polyfit_degree=1):
         self.polyfit_degree = 1
+        self.warmup = warmup
 
     def process(
         self,
@@ -181,7 +182,7 @@ class SortWindowedHealthDataframe(beam.DoFn):
             Any, Iterable[WindowedHealthRecord]
         ] = beam.DoFn.ElementParam,
         window=beam.DoFn.WindowParam,
-    ) -> Tuple[Any, WindowedHealthDataFrames]:
+    ) -> Iterable[Tuple[str, WindowedHealthDataFrames]]:
         key, windowed_health_records = keyed_elements
 
         window_start = int(window.start)
@@ -191,47 +192,21 @@ class SortWindowedHealthDataframe(beam.DoFn):
             .sort_values("ts")
             .set_index(["ts"])
         )
-
-        # yield
-        # n_frames = len(df.index.unique())
-        # window_start = int(window.start)
-        # window_end = int(window.end)
-        # if n_frames <= self.warmup:
-        #     logger.warning(
-        #         f"Ignoring CalcHealthScoreTrend called with n_frames={n_frames} warmup={self.warmup} session={session} window=({window_start}_{window_end})"
-        #     )
-        #     return
-
-        cumsum_df, trend = health_score_trend_polynomial_v1(
-            df, degree=self.polyfit_degree
-        )
+        if len(df) < self.warmup:
+            return
+        cumsum, trend = health_score_trend_polynomial_v1(df, degree=self.polyfit_degree)
         metadata = df.iloc[0]["metadata"]
         record_df = df.drop(columns=["metadata"], axis=1)
-        yield key, WindowedHealthDataFrames(
-            session=key,
-            trend=trend,
-            record_df=record_df,
-            cumsum_df=cumsum_df,
-            metadata=metadata
+        yield (
+            key,
+            WindowedHealthDataFrames(
+                session=key,
+                trend=trend,
+                record_df=record_df,
+                cumsum=cumsum,
+                metadata=metadata,
+            ),
         )
-        # yield
-        # should_alert = self.should_alert(session, trend)
-        # logger.info(f"should_alert={should_alert} for trend={trend}")
-        # if should_alert:
-        #     file_pattern = os.path.join(self.parquet_sink, session, "*")
-        #     sample_event = windowed_health_records[0]
-
-        #     pending_alert = PendingAlert(
-        #         session=session,
-        #         client_version=sample_element.client_version,
-        #         user_id=sample_element.user_id,
-        #         device_id=sample_element.device_id,
-        #         device_cloudiot_id=sample_element.device_cloudiot_id,
-        #         window_start=sample_element.window_start,
-        #         window_end=sample_element.window_end,
-        #         file_pattern=file_pattern,
-        #     )
-        #     yield pending_alert.to_bytes()
 
 
 class MonitorHealthStateful(beam.DoFn):
@@ -244,29 +219,29 @@ class MonitorHealthStateful(beam.DoFn):
 
     def process(
         self,
-        element: WindowedHealthDataFrames,
+        element: Tuple[Any, WindowedHealthDataFrames],
         pane_info=beam.DoFn.PaneInfoParam,
         failures=beam.DoFn.StateParam(FAILURES),
     ) -> Iterable[WindowedHealthDataFrames]:
         key, value = element
 
-        slope, intercept = element.trend
+        slope, intercept = value.trend
         if slope < 0:
             failures.add(1)
 
         current_failures = failures.read()
-        element = element.with_failure_count(current_failures)
+        value = value.with_failure_count(current_failures)
         # @TODO analyze production distribution and write alert behavior
 
         # @TODO write pyarrow schema instead of inferring it here
         # table = pa.Table.from_pydict(element.to_dict())
 
-        yield key, element
+        yield key, value
 
         # if this is the last window pane in session, begin video rendering
         if pane_info.is_last:
             pending_alert = PendingAlert(
-                metadata=element.metadata,
+                metadata=value.metadata,
                 session=key,
             )
             pending_alert | beam.WriteToPubSub(self.pubsub_topic)
