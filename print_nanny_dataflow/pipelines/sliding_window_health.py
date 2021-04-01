@@ -40,6 +40,7 @@ from print_nanny_dataflow.transforms.health import (
     predict_bounding_boxes,
     health_score_trend_polynomial_v1,
     FilterAreaOfInterest,
+    SortedHealthCumsum,
 )
 
 from print_nanny_dataflow.encoders.types import (
@@ -157,34 +158,53 @@ def run_pipeline(args, pipeline_args):
                 ),
                 accumulation_mode=beam.transforms.trigger.AccumulationMode.ACCUMULATING,
             )
-            | "Group SlidingWindow NestedTelemeryEvent by key" >> beam.GroupByKey()
-            | "Explode arrays in NestedTelemetryEvent"
-            >> beam.ParDo(ExplodeWindowedHealthRecord())
-            | beam.GroupBy("session")
+            # | "Explode arrays in NestedTelemetryEvent"
+            # >> beam.ParDo(ExplodeWindowedHealthRecord())| beam.GroupBy("session")
         )
 
-        _ = sliding_window_view | "Write SlidingWindow Parquet" >> beam.ParDo(
-            WriteWindowedParquet(
-                args.sliding_window_health_dataframe_sink,
-                WindowedHealthRecord.pyarrow_schema(),
+        _ = (
+            sliding_window_view
+            | "Write SlidingWindow ExplodeWindowedHealthRecord Parquet"
+            >> beam.ParDo(ExplodeWindowedHealthRecord())
+            | "Group unfiltered health records by key" >> beam.GroupBy("session")
+            | "Write SlidingWindow Parquet"
+            >> beam.ParDo(
+                WriteWindowedParquet(
+                    args.sliding_window_health_dataframe_sink,
+                    WindowedHealthRecord.pyarrow_schema(),
+                )
             )
         )
+
+        # @TODO enrich pcol with calibration as side input to avoid group/transform/regroup?
+
+        alert_pipeline = (
+            sliding_window_view
+            | "Filter detections below threshold & outside area of interest"
+            >> beam.GroupByKey()
+            | beam.ParDo(
+                FilterAreaOfInterest(args.calibration_base_path, score_threshold=0.5)
+            )
+            | beam.Map(lambda x: (x.session, x))
+            | beam.ParDo(ExplodeWindowedHealthRecord())
+            | beam.GroupBy("session")
+            | beam.ParDo(SortedHealthCumsum())
+            | beam.Map(print)
+        )
+
+        # FilterAreaOfInterest(args.calibration_base_path, score_threshold=0.5)
 
         # output_topic = os.path.join(
         #     "projects", args.project, "topics", args.render_video_topic
         # )
-        # windowed_health_dataframe = (
-        #     sliding_window_view
-        #     | "Drop detections below confidence threshold & outside of calibration area of interest"
-        #     >> beam.ParDo(
-        #         FilterAreaOfInterest(args.calibration_base_path, score_threshold=0.5)
-        #     ).with_output_types(Tuple[str, Iterable[NestedTelemetryEvent]])
-        #     | "Flatten remaining observations in NestedTelemetryEvent"
-        #     >> beam.ParDo(ExplodeWindowedHealthRecord()).with_output_types(
-        #         Tuple[str, Iterable[WindowedHealthRecord]]
-        #     )
-        #     | "Calc cumulative health score sum" >> DataframeTransform(lambda df: df.groupby(["session", "ts"]).sort_values("ts").cumsum())
+        # windowed_health_pcol = (
+        #     sliding_windobeam.GroupBy("session")w_view
 
+        # | "Flatten remaining observations in NestedTelemetryEvent"
+        # >> beam.ParDo(ExplodeWindowedHealthRecord()) | beam.Map(print)
+        # | "Calc cumulative health score sum" >> DataframeTransform(lambda df: df.sort_values("ts").groupby(["session", "ts"]).cumsum())
+
+        # with with beam.dataframe.allow_non_parallel_operations(True)
         # | "Calculate health score trend and publish alerts"
         # >> beam.ParDo(
         #     CheckpointHealthScoreTrend(

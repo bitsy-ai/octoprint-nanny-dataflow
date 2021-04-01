@@ -60,9 +60,6 @@ class PendingAlert(NamedTuple):
 
 
 class WindowedHealthRecord(NamedTuple):
-    """
-    Many FlatTelemetryEvent : 1 Monitoring Frame
-    """
 
     ts: int
     client_version: str

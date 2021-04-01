@@ -1,6 +1,7 @@
 from typing import Tuple, Iterable, Optional, Any, NamedTuple
 import logging
 
+import os
 import numpy as np
 import pandas as pd
 import tensorflow as tf
@@ -85,36 +86,45 @@ def predict_bounding_boxes(element: NestedTelemetryEvent, model_path: str):
 class ExplodeWindowedHealthRecord(beam.DoFn):
     def process(
         self,
-        keyed_element: Tuple[str, Iterable[NestedTelemetryEvent]],
+        keyed_element: Tuple[Any, NestedTelemetryEvent],
         window=beam.DoFn.WindowParam,
     ) -> Iterable[WindowedHealthRecord]:
-        session, elements = keyed_element
+        key, event = keyed_element
         window_start = int(window.start)
         window_end = int(window.end)
 
-        return elements | beam.FlatMap(
-            lambda event: [
-                WindowedHealthRecord(
-                    ts=event.ts,
-                    session=event.session,
-                    client_version=event.client_version,
-                    user_id=event.user_id,
-                    device_id=event.device_id,
-                    device_cloudiot_id=event.device_cloudiot_id,
-                    detection_score=event.detection_scores[i],
-                    detection_class=event.detection_classes[i],
-                    window_start=window_start,
-                    window_end=window_end,
-                    health_weight=CATEGORY_INDEX[event.detection_classes[i]][
-                        "health_weight"
-                    ],
-                    health_score=CATEGORY_INDEX[event.detection_classes[i]][
-                        "health_weight"
-                    ]
-                    * event.detection_scores[i],
-                )
-                for i in range(0, event.num_detections)
-            ]
+        return [
+            WindowedHealthRecord(
+                ts=event.ts,
+                session=event.session,
+                client_version=event.client_version,
+                user_id=event.user_id,
+                device_id=event.device_id,
+                device_cloudiot_id=event.device_cloudiot_id,
+                detection_score=event.detection_scores[i],
+                detection_class=event.detection_classes[i],
+                window_start=window_start,
+                window_end=window_end,
+                health_weight=CATEGORY_INDEX[event.detection_classes[i]][
+                    "health_weight"
+                ],
+                health_score=CATEGORY_INDEX[event.detection_classes[i]]["health_weight"]
+                * event.detection_scores[i],
+            )
+            for i in range(0, event.num_detections)
+        ]
+
+
+class SortedHealthCumsum(beam.DoFn):
+    def process(
+        self,
+        keyed_elements: Tuple[
+            Any, Iterable[WindowedHealthRecord]
+        ] = beam.DoFn.ElementParam,
+    ):
+        key, elements = keyed_elements
+        yield elements | DataframeTransform(
+            lambda df: df.sort_values("ts").groupby(["session", "ts"]).cumsum()
         )
 
 
@@ -148,19 +158,19 @@ class FilterAreaOfInterest(beam.DoFn):
 
     def process(
         self,
-        keyed_elements: Tuple[Any, Iterable[NamedTuple]] = beam.DoFn.ElementParam,
+        keyed_elements: Tuple[
+            Any, Iterable[NestedTelemetryEvent]
+        ] = beam.DoFn.ElementParam,
         key=beam.DoFn.KeyParam,
-    ) -> Tuple[str, Iterable[NestedTelemetryEvent]]:
-        # session, elements = keyed_element
+    ) -> Iterable[NestedTelemetryEvent]:
+        session, elements = keyed_elements
 
         calibration = self.load_calibration(elements[0])
 
         if calibration:
-            yield key, elements | beam.Map(
-                lambda event: calibration.filter_event(event)
-            )
+            yield beam.Map(lambda event: calibration.filter_event(event))
         else:
-            yield key, elements
+            yield elements
 
 
 # class WindowedHealthDataframe(beam.DoFn):
