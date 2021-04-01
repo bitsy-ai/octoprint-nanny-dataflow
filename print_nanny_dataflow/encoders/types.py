@@ -126,7 +126,9 @@ class WindowedHealthDataFrames(NamedTuple):
         return self._asdict()
 
     def with_failure_count(self, failure_count: int):
-        return self.__class__(failure_count=failure_count, **self.to_dict())
+        _kwargs = self.to_dict()
+        _kwargs.update(dict(failure_count=failure_count))
+        return self.__class__(**_kwargs)
 
     # @TODO currently inferred using pandas
     @staticmethod
@@ -241,17 +243,21 @@ class DeviceCalibration(NamedTuple):
             k: v for k, v in self.to_dict().items() if k not in filter_fields
         }
         boxes_ymin, boxes_xmin, boxes_ymax, boxes_xmax = detection_boxes.T
-        return self.__class__(
-            detection_scores=detection_scores,
-            detection_classes=detection_classes,
-            num_detections=num_detections,
-            boxes_ymin=boxes_ymin,
-            boxes_xmin=boxes_xmin,
-            boxes_ymax=boxes_ymax,
-            boxes_xmax=boxes_xmax,
-            calbiration=self,
-            **default_fieldset
+
+        _kwargs = self.to_dict()
+        _kwargs.update(
+            dict(
+                detection_scores=detection_scores,
+                detection_classes=detection_classes,
+                num_detections=num_detections,
+                boxes_ymin=boxes_ymin,
+                boxes_xmin=boxes_xmin,
+                boxes_ymax=boxes_ymax,
+                boxes_xmax=boxes_xmax,
+                calibration=self,
+            )
         )
+        return NestedTelemetryEvent.__class__(**_kwargs)
 
 
 class NestedTelemetryEvent(NamedTuple):

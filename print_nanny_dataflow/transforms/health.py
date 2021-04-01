@@ -172,7 +172,7 @@ class SortWindowedHealthDataframe(beam.DoFn):
     https://beam.apache.org/documentation/dsls/dataframes/overview/
     """
 
-    def __init__(self, warmup=2, polyfit_degree=1):
+    def __init__(self, warmup=3, polyfit_degree=1):
         self.polyfit_degree = 1
         self.warmup = warmup
 
@@ -192,7 +192,7 @@ class SortWindowedHealthDataframe(beam.DoFn):
             .sort_values("ts")
             .set_index(["ts"])
         )
-        if len(df) < self.warmup:
+        if len(df.index) < self.warmup:
             return
         cumsum, trend = health_score_trend_polynomial_v1(df, degree=self.polyfit_degree)
         metadata = df.iloc[0]["metadata"]
@@ -222,7 +222,7 @@ class MonitorHealthStateful(beam.DoFn):
         element: Tuple[Any, WindowedHealthDataFrames],
         pane_info=beam.DoFn.PaneInfoParam,
         failures=beam.DoFn.StateParam(FAILURES),
-    ) -> Iterable[WindowedHealthDataFrames]:
+    ) -> Iterable[Tuple[str, WindowedHealthDataFrames]]:
         key, value = element
 
         slope, intercept = value.trend
@@ -239,9 +239,16 @@ class MonitorHealthStateful(beam.DoFn):
         yield key, value
 
         # if this is the last window pane in session, begin video rendering
-        if pane_info.is_last:
-            pending_alert = PendingAlert(
-                metadata=value.metadata,
-                session=key,
+        if current_failures > self.failure_threshold:
+            logger.warning(
+                f"FAILURE DETECTED session={value.session} current_failurest={current_failures}"
             )
-            pending_alert | beam.WriteToPubSub(self.pubsub_topic)
+        if pane_info.is_last:
+            logger.info(f"Last pane fired in pane_info={pane_info}")
+
+            # Exception: PubSub I/O is only available in streaming mode (use the --streaming flag). [while running 'Stateful health score threshold monitor']
+            # pending_alert = PendingAlert(
+            #     metadata=value.metadata,
+            #     session=key,
+            # )
+            # [pending_alert] | beam.io.WriteToPubSub(self.pubsub_topic)

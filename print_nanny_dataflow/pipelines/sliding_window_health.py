@@ -87,6 +87,9 @@ def run_pipeline(args, pipeline_args):
     )
 
     input_topic_path = os.path.join("projects", args.project, "topics", args.topic)
+    output_topic_path = os.path.join(
+        "projects", args.project, "topics", args.render_video_topic
+    )
 
     # download model tarball
     if args.runner == "DataflowRunner":
@@ -211,7 +214,7 @@ def run_pipeline(args, pipeline_args):
                 accumulation_mode=beam.transforms.trigger.AccumulationMode.DISCARDING,
             )
             | "Stateful health score threshold monitor"
-            >> beam.ParDo(MonitorHealthStateful(args.render_video_topic))
+            >> beam.ParDo(MonitorHealthStateful(output_topic_path))
             # | "Write health trend parquet" >> beam.GroupBy("session")
             # | beam.ParDo(
             #     WriteWindowedParquet(
