@@ -15,6 +15,7 @@ from print_nanny_dataflow.encoders.types import (
     DeviceCalibration,
     PendingAlert,
     Metadata,
+    HealthTrend,
 )
 
 logger = logging.getLogger(__name__)
@@ -45,12 +46,7 @@ def health_score_trend_polynomial_v1(
             fill_value=0,
         )
     )
-    try:
-        trend = np.polynomial.polynomial.Polynomial.fit(xy.index, xy, degree)
-    except ValueError as e:
-        logger.error(e)
-        logger.info(df)
-        return
+    trend = np.polynomial.polynomial.Polynomial.fit(xy.index, xy, degree)
     return xy, trend
 
 
@@ -197,11 +193,30 @@ class SortWindowedHealthDataframe(beam.DoFn):
         )
         if len(df.index) < self.warmup:
             return
-        cumsum, trend = health_score_trend_polynomial_v1(df, degree=self.polyfit_degree)
-
+        try:
+            cumsum, trend = health_score_trend_polynomial_v1(
+                df, degree=self.polyfit_degree
+            )
+        except ValueError as e:
+            logger.error(
+                {
+                    "error": e,
+                    "data": df,
+                    "msg": "Fatal error in SortWindowedHealthDataframe transform",
+                }
+            )
+            return
         # import pdb; pdb.set_trace()
         metadata = df.iloc[0]["metadata"]
         record_df = df.drop(columns=["metadata"], axis=1)
+
+        trend = HealthTrend(
+            coef=np.array(trend.coef),
+            domain=np.array(trend.domain),
+            window=np.array(trend.window),
+            roots=np.array(trend.roots()),
+            degree=trend.degree(),
+        )
         yield (
             key,
             WindowedHealthDataFrames(

@@ -1,6 +1,7 @@
 import os
 import logging
 import pandas as pd
+import numpy as np
 from collections import OrderedDict
 from typing import Tuple, Any, Iterable, NamedTuple, List
 import apache_beam as beam
@@ -43,7 +44,13 @@ class WriteWindowedTFRecord(beam.DoFn):
         )
 
 
-SERIALIZE_FNS = {pd.DataFrame: lambda x, name: x.itertuples(name=name)}
+# TODO beam parquetio pyarrow serializer only handles basic Python types, hence list() on itertuples zip generator below
+# pyarrow.lib.ArrowTypeError: Could not convert <zip object at 0x7f578011ef80> with type zip: was not a sequence or recognized null for conversion to list type [while running 'WriteToParquet/Write/WriteImpl/WriteBundles']
+SERIALIZE_FNS = {
+    pd.DataFrame: lambda x: list(tuple(n) for n in x.itertuples(name=None)),
+    pd.Series: lambda x: list(x),
+    np.polynomial.polynomial.Polynomial: lambda x: list(x),
+}
 
 
 class WriteWindowedParquet(beam.DoFn):
@@ -51,19 +58,16 @@ class WriteWindowedParquet(beam.DoFn):
         self.base_path = base_path
         self.schema = schema
 
-    def serialize_item(self, item, name):
+    def serialize_item(self, item):
         serialize_fn = SERIALIZE_FNS.get(type(item))
         if serialize_fn:
-            return serialize_fn(item, name)
+            return serialize_fn(item)
         return item
 
     def serialize(self, element):
         # TODO WriteToParquet does not serialize DataFrames with pa.Schema.from_pandas() - only supports dict input at the moment
         # [80 rows x 5 columns] with type DataFrame: was not a dict, tuple, or recognized null value for conversion to struct type [while running 'WriteToParquet/Write/WriteImpl/WriteBundles']
-        return {
-            k: self.serialize_item(v, element[k].__name__)
-            for k, v in element.to_dict().items()
-        }
+        return {k: self.serialize_item(v) for k, v in element.to_dict().items()}
 
     def process(
         self,
