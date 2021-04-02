@@ -45,7 +45,12 @@ def health_score_trend_polynomial_v1(
             fill_value=0,
         )
     )
-    trend = np.polynomial.polynomial.Polynomial.fit(xy.index, xy, degree)
+    try:
+        trend = np.polynomial.polynomial.Polynomial.fit(xy.index, xy, degree)
+    except ValueError as e:
+        logger.error(e)
+        logger.info(df)
+        return
     return xy, trend
 
 
@@ -193,6 +198,8 @@ class SortWindowedHealthDataframe(beam.DoFn):
         if len(df.index) < self.warmup:
             return
         cumsum, trend = health_score_trend_polynomial_v1(df, degree=self.polyfit_degree)
+
+        # import pdb; pdb.set_trace()
         metadata = df.iloc[0]["metadata"]
         record_df = df.drop(columns=["metadata"], axis=1)
         yield (

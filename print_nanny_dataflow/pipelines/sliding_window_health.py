@@ -198,11 +198,12 @@ def run_pipeline(args, pipeline_args):
 
         _ = (
             windowed_health_dataframe
-            | "Write health trend parquet" >> beam.GroupByKey()
-            | beam.ParDo(
+            | "Group SlidingWindow WindowedHealthDataFrames by key" >> beam.GroupByKey()
+            | "Write unfilterrd WindowedHealthDataFrames"
+            >> beam.ParDo(
                 WriteWindowedParquet(
-                    args.sliding_window_health_trend_sink,
-                    WindowedHealthDataFrames.pyarrow_schema(args.num_detections),
+                    args.session_window_health_trend_sink,
+                    WindowedHealthDataFrames.pyarrow_schema(),
                 )
             )
         )

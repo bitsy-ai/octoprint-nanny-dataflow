@@ -151,7 +151,7 @@ class WindowedHealthDataFrameRow(NamedTuple):
 class WindowedHealthDataFrames(NamedTuple):
     session: str
     record_df: pd.DataFrame
-    cumsum: pd.DataFrame
+    cumsum: npt.NDArray[npt.Float32]
     trend: np.polynomial.polynomial.Polynomial
     metadata: Metadata
     failure_count: int = 0
@@ -169,7 +169,7 @@ class WindowedHealthDataFrames(NamedTuple):
         return [
             ("session", pa.string()),
             ("metadata", Metadata.pyarrow_struct()),
-            ("record_df", WindowedHealthDataFrameRow.pyarrow_struct()),
+            ("record_df", pa.list_(WindowedHealthDataFrameRow.pyarrow_struct())),
             ("cumsum", pa.list_(pa.float32())),
             ("failure_count", pa.int64()),
             ("trend", HealthTrend.pyarrow_struct()),
