@@ -43,7 +43,7 @@ class WriteWindowedTFRecord(beam.DoFn):
         )
 
 
-SERIALIZE_FNS = {pd.DataFrame: lambda x: x.to_records()}
+SERIALIZE_FNS = {pd.DataFrame: lambda x, name: x.itertuples(name=name)}
 
 
 class WriteWindowedParquet(beam.DoFn):
@@ -51,16 +51,19 @@ class WriteWindowedParquet(beam.DoFn):
         self.base_path = base_path
         self.schema = schema
 
-    def serialize_item(self, item):
+    def serialize_item(self, item, name):
         serialize_fn = SERIALIZE_FNS.get(type(item))
         if serialize_fn:
-            return serialize_fn(item)
+            return serialize_fn(item, name)
         return item
 
     def serialize(self, element):
         # TODO WriteToParquet does not serialize DataFrames with pa.Schema.from_pandas() - only supports dict input at the moment
         # [80 rows x 5 columns] with type DataFrame: was not a dict, tuple, or recognized null value for conversion to struct type [while running 'WriteToParquet/Write/WriteImpl/WriteBundles']
-        return {k: self.serialize_item(v) for k, v in element.to_dict().items()}
+        return {
+            k: self.serialize_item(v, element[k].__name__)
+            for k, v in element.to_dict().items()
+        }
 
     def process(
         self,
