@@ -16,25 +16,13 @@ from print_nanny_client.telemetry_event import TelemetryEvent
 
 from dataclasses import dataclass, asdict
 
-DETECTION_LABELS = {
-    1: "nozzle",
-    2: "adhesion",
-    3: "spaghetti",
-    4: "print",
-    5: "raft",
-}
-
-HEALTH_MULTIPLER = {1: 0, 2: -0.5, 3: -0.5, 4: 1, 5: 0}
-
-NEUTRAL_LABELS = {1: "nozzle", 5: "raft"}
-
-NEGATIVE_LABELS = {
-    2: "adhesion",
-    3: "spaghetti",
-}
-
-POSITIVE_LABELS = {
-    4: "print",
+CATEGORY_INDEX = {
+    0: {"name": "background", "id": 0, "health_weight": 0},
+    1: {"name": "nozzle", "id": 1, "health_weight": 0},
+    2: {"name": "adhesion", "id": 2, "health_weight": -0.5},
+    3: {"name": "spaghetti", "id": 3, "health_weight": -0.5},
+    4: {"name": "print", "id": 4, "health_weight": 1},
+    5: {"name": "raftt", "id": 5, "health_weight": 1},
 }
 
 
@@ -77,9 +65,15 @@ class Metadata(NamedTuple):
         return pa.schema(cls.pyarrow_fields())
 
 
-class PendingAlert(NamedTuple):
+class AlertMessageType(Enum):
+    FAILURE = 1
+    SESSION_DONE = 2
+
+
+class CreateVideoMessage(NamedTuple):
     session: str
     metadata: Metadata
+    alert_type: AlertMessageType
 
     def get_filepattern(self, input_path):
         return os.path.join(input_path, self.session, "*")

@@ -24,7 +24,7 @@ clean-pyc: ## remove Python file artifacts
 clean: clean-dist clean-pyc clean-build
 
 alerts-local-dev:
-	$(PYTHON) print_nanny_dataflow/video_render.py \
+	$(PYTHON) print_nanny_dataflow/pipelines/video_render.py \
 	--runner DirectRunner \
 	--loglevel INFO \
 	--api-url="http://localhost:8000/api" \

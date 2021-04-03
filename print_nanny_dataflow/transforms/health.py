@@ -13,22 +13,14 @@ from print_nanny_dataflow.encoders.types import (
     WindowedHealthRecord,
     NestedWindowedHealthTrend,
     DeviceCalibration,
-    PendingAlert,
+    CreateVideoMessage,
     Metadata,
     NestedWindowedHealthTrend,
+    CATEGORY_INDEX,
+    AlertMessageType,
 )
 
 logger = logging.getLogger(__name__)
-
-# @todo load dynamically from active experiment
-CATEGORY_INDEX = {
-    0: {"name": "background", "id": 0, "health_weight": 0},
-    1: {"name": "nozzle", "id": 1, "health_weight": 0},
-    2: {"name": "adhesion", "id": 2, "health_weight": -0.5},
-    3: {"name": "spaghetti", "id": 3, "health_weight": -0.5},
-    4: {"name": "print", "id": 4, "health_weight": 1},
-    5: {"name": "raftt", "id": 5, "health_weight": 1},
-}
 
 
 def health_score_trend_polynomial_v1(
@@ -239,16 +231,20 @@ class ShouldPublishAlert(beam.DoFn):
         key, values = element
         # publish video rendering message
         if pane_info.is_last:
-            pending_alert = PendingAlert(
-                session=key, metadata=values[0].metadata
+            msg = CreateVideoMessage(
+                session=key,
+                metadata=values[0].metadata,
+                alert_type=AlertMessageType.SESSION_DONE,
             ).to_bytes()
-            yield pending_alert
+            yield msg
         # @TODO analyze production distribution and write alert behavior for session panes
         else:
-            pending_alert = PendingAlert(
-                session=key, metadata=values[0].metadata
+            msg = CreateVideoMessage(
+                session=key,
+                metadata=values[0].metadata,
+                alert_type=AlertMessageType.FAILURE,
             ).to_bytes()
-            yield pending_alert
+            yield msg
 
 
 class MonitorHealthStateful(beam.DoFn):
@@ -307,7 +303,7 @@ class MonitorHealthStateful(beam.DoFn):
         #     logger.info(f"Last pane fired in pane_info={pane_info} window={window} failures={current_failures}")
 
         #     # Exception: PubSub I/O is only available in streaming mode (use the --streaming flag). [while running 'Stateful health score threshold monitor']
-        # pending_alert = PendingAlert(
+        # pending_alert = CreateVideoMessage(
         #     metadata=value.metadata,
         #     session=key,
         # )
