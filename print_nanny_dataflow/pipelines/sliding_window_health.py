@@ -32,6 +32,7 @@ from apache_beam.transforms.trigger import (
     AfterCount,
     Repeatedly,
     AfterWatermark,
+    AfterProcessingTime,
 )
 from apache_beam.transforms import trigger
 from tensorflow_transform.tf_metadata import dataset_metadata
@@ -47,13 +48,14 @@ from print_nanny_dataflow.transforms.health import (
     FilterAreaOfInterest,
     SortWindowedHealthDataframe,
     MonitorHealthStateful,
+    ShouldPublishAlert,
 )
 
 from print_nanny_dataflow.encoders.types import (
     NestedTelemetryEvent,
     WindowedHealthRecord,
     DeviceCalibration,
-    WindowedHealthDataFrames,
+    NestedWindowedHealthTrend,
 )
 
 from print_nanny_dataflow.utils.visualization import (
@@ -84,7 +86,114 @@ async def download_active_experiment_model(tmp_dir=".tmp/", model_artifact_id=1)
     logger.info(f"Finished extracting {tmp_artifacts_tarball}")
 
 
-def run_pipeline(args, pipeline_args):
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+
+    parser.add_argument("--loglevel", default="INFO")
+    parser.add_argument("--project", default="print-nanny-sandbox")
+
+    parser.add_argument(
+        "--topic",
+        default="monitoring-frame-raw",
+        help="PubSub topic",
+    )
+
+    parser.add_argument(
+        "--session-window-gap-size",
+        default="monitoring-frame-raw",
+        help="PubSub topic",
+    )
+
+    parser.add_argument(
+        "--quiet",
+        default=False,
+        help="Enable quiet mode to only log results and supress alert sending",
+    )
+
+    parser.add_argument(
+        "--bucket",
+        default="print-nanny-sandbox",
+        help="GCS Bucket",
+    )
+
+    parser.add_argument(
+        "--render-video-topic",
+        default="monitoring-video-render",
+        help="Video rendering and alert push jobs will be published to this PubSub topic",
+    )
+
+    parser.add_argument(
+        "--fixed-window-tfrecord-sink",
+        default="gs://print-nanny-sandbox/dataflow/telemetry_event/fixed_window/NestedTelemetryEvent/tfrecords",
+        help="Unfiltered NestedTelemetryEvent emitted from FixedWindow (single point in time)",
+    )
+
+    parser.add_argument(
+        "--fixed-window-parquet-sink",
+        default="gs://print-nanny-sandbox/dataflow/telemetry_event/fixed_window/NestedTelemetryEvent/parquet",
+        help="Unfiltered NestedTelemetryEvent emitted from FixedWindow (single point in time)",
+    )
+
+    parser.add_argument(
+        "--sliding-window-health-raw-sink",
+        default="gs://print-nanny-sandbox/dataflow/telemetry_event/sliding_window/WindowedHealthRecord/parquet",
+        help="Unfiltered WindowedHealthRecord emitted from SlidingWindow",
+    )
+
+    parser.add_argument(
+        "--session-window-health-trend-sink",
+        default="gs://print-nanny-sandbox/dataflow/telemetry_event/session_window/NestedWindowedHealthTrend/parquet",
+        help="Post-filtered WindowedHelathDataframe emitted from session window",
+    )
+
+    parser.add_argument(
+        "--calibration-base-path",
+        default="gs://print-nanny-sandbox/uploads/device_calibration",
+        help="Files will be output to this gcs bucket",
+    )
+
+    parser.add_argument(
+        "--health-window-size",
+        default=60 * 5,
+        help="Size of sliding event window (in seconds)",
+    )
+
+    parser.add_argument(
+        "--health-window-period",
+        default=60,
+        help="Size of sliding event window slices (in seconds)",
+    )
+
+    parser.add_argument(
+        "--num-detections",
+        default=40,
+        help="Max number of bounding boxes output by nms operation",
+    )
+
+    parser.add_argument("--api-token", help="Print Nanny API token")
+
+    parser.add_argument(
+        "--api-url", default="https://print-nanny.com/api", help="Print Nanny API url"
+    )
+
+    parser.add_argument(
+        "--model-version",
+        default="tflite-print3d_20201101015829-2021-02-24T05:16:05.082500Z",
+    )
+
+    parser.add_argument("--tmp-dir", default=".tmp/", help="Filesystem tmp directory")
+
+    parser.add_argument(
+        "--batch-size",
+        default=256,
+    )
+
+    parser.add_argument("--runner", default="DataflowRunner")
+
+    args, pipeline_args = parser.parse_known_args()
+
     logging.basicConfig(level=getattr(logging, args.loglevel))
 
     beam_options = PipelineOptions(
@@ -196,151 +305,37 @@ def run_pipeline(args, pipeline_args):
             | "Windowed health DataFrame" >> beam.ParDo(SortWindowedHealthDataframe())
         )
 
-        _ = (
-            windowed_health_dataframe
-            | "Group SlidingWindow WindowedHealthDataFrames by key" >> beam.GroupByKey()
-            | "Write unfilterrd WindowedHealthDataFrames"
-            >> beam.ParDo(
-                WriteWindowedParquet(
-                    args.session_window_health_trend_sink,
-                    WindowedHealthDataFrames.pyarrow_schema(),
-                )
-            )
+        alert_pipeline_trigger = AfterWatermark(
+            early=AfterProcessingTime(args.health_window_period), late=AfterCount(1)
         )
-
-        alert_pipeline_trigger = OrFinally(Repeatedly(AfterCount(1)), AfterWatermark())
         session_gap = args.health_window_period * 3
 
         # accumulates failure count
-        stateful_health_dataframe = (
+        session_accumulating_dataframe = (
             windowed_health_dataframe
             | beam.WindowInto(
                 beam.transforms.window.Sessions(session_gap),
                 trigger=alert_pipeline_trigger,
-                accumulation_mode=beam.transforms.trigger.AccumulationMode.DISCARDING,
+                accumulation_mode=beam.transforms.trigger.AccumulationMode.ACCUMULATING,
             )
+            | beam.GroupByKey()
             | "Stateful health score threshold monitor"
             >> beam.ParDo(MonitorHealthStateful(output_topic_path))
         )
 
+        on_session_end = (
+            session_accumulating_dataframe
+            | "Should alert for session?"
+            >> beam.ParDo(ShouldPublishAlert(output_topic_path))
+        )
+
         _ = (
-            stateful_health_dataframe
-            | "Write session windows to Parquet" >> beam.GroupByKey()
-            | beam.ParDo(
+            session_accumulating_dataframe
+            | "Write session windows to Parquet"
+            >> beam.ParDo(
                 WriteWindowedParquet(
                     args.session_window_health_trend_sink,
-                    WindowedHealthDataFrames.pyarrow_schema(),
+                    NestedWindowedHealthTrend.pyarrow_schema(),
                 )
             )
         )
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
-    )
-
-    parser.add_argument("--loglevel", default="INFO")
-    parser.add_argument("--project", default="print-nanny-sandbox")
-
-    parser.add_argument(
-        "--topic",
-        default="monitoring-frame-raw",
-        help="PubSub topic",
-    )
-
-    parser.add_argument(
-        "--session-window-gap-size",
-        default="monitoring-frame-raw",
-        help="PubSub topic",
-    )
-
-    parser.add_argument(
-        "--quiet",
-        default=False,
-        help="Enable quiet mode to only log results and supress alert sending",
-    )
-
-    parser.add_argument(
-        "--bucket",
-        default="print-nanny-sandbox",
-        help="GCS Bucket",
-    )
-
-    parser.add_argument(
-        "--render-video-topic",
-        default="monitoring-video-render",
-        help="Video rendering and alert push jobs will be published to this PubSub topic",
-    )
-
-    parser.add_argument(
-        "--fixed-window-tfrecord-sink",
-        default="gs://print-nanny-sandbox/dataflow/telemetry_event/fixed_window/NestedTelemetryEvent/tfrecords",
-        help="Unfiltered NestedTelemetryEvent emitted from FixedWindow (single point in time)",
-    )
-
-    parser.add_argument(
-        "--fixed-window-parquet-sink",
-        default="gs://print-nanny-sandbox/dataflow/telemetry_event/fixed_window/NestedTelemetryEvent/parquet",
-        help="Unfiltered NestedTelemetryEvent emitted from FixedWindow (single point in time)",
-    )
-
-    parser.add_argument(
-        "--sliding-window-health-raw-sink",
-        default="gs://print-nanny-sandbox/dataflow/telemetry_event/sliding_window/WindowedHealthRecord/parquet",
-        help="Unfiltered WindowedHealthRecord emitted from SlidingWindow",
-    )
-
-    parser.add_argument(
-        "--session-window-health-trend-sink",
-        default="gs://print-nanny-sandbox/dataflow/telemetry_event/session_window/WindowedHealthDataFrames",
-        help="Post-filtered WindowedHelathDataframe emitted from session window",
-    )
-
-    parser.add_argument(
-        "--calibration-base-path",
-        default="gs://print-nanny-sandbox/uploads/device_calibration",
-        help="Files will be output to this gcs bucket",
-    )
-
-    parser.add_argument(
-        "--health-window-size",
-        default=60 * 10,
-        help="Size of sliding event window (in seconds)",
-    )
-
-    parser.add_argument(
-        "--health-window-period",
-        default=60,
-        help="Size of sliding event window slices (in seconds)",
-    )
-
-    parser.add_argument(
-        "--num-detections",
-        default=40,
-        help="Max number of bounding boxes output by nms operation",
-    )
-
-    parser.add_argument("--api-token", help="Print Nanny API token")
-
-    parser.add_argument(
-        "--api-url", default="https://print-nanny.com/api", help="Print Nanny API url"
-    )
-
-    parser.add_argument(
-        "--model-version",
-        default="tflite-print3d_20201101015829-2021-02-24T05:16:05.082500Z",
-    )
-
-    parser.add_argument("--tmp-dir", default=".tmp/", help="Filesystem tmp directory")
-
-    parser.add_argument(
-        "--batch-size",
-        default=256,
-    )
-
-    parser.add_argument("--runner", default="DataflowRunner")
-
-    args, pipeline_args = parser.parse_known_args()
-
-    run_pipeline(args, pipeline_args)

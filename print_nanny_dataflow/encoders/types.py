@@ -101,6 +101,9 @@ class HealthTrend(NamedTuple):
     roots: npt.NDArray[npt.Float32]
     degree: int
 
+    def to_dict(self) -> Dict[str, Any]:
+        return self._asdict()
+
     @staticmethod
     def pyarrow_fields():
         return [
@@ -128,6 +131,9 @@ class WindowedHealthDataFrameRow(NamedTuple):
     detection_class: npt.Int32
     detection_score: npt.Float32
 
+    def to_dict():
+        return self._asdict()
+
     @staticmethod
     def pyarrow_fields():
         return [
@@ -148,31 +154,54 @@ class WindowedHealthDataFrameRow(NamedTuple):
         return pa.schema(cls.pyarrow_fields())
 
 
-class WindowedHealthDataFrames(NamedTuple):
+class NestedWindowedHealthTrend(NamedTuple):
     session: str
-    record_df: pd.DataFrame
-    cumsum: npt.NDArray[npt.Float32]
-    trend: np.polynomial.polynomial.Polynomial
     metadata: Metadata
-    failure_count: int = 0
+    health_score: npt.NDArray[npt.Float32]
+    health_weight: npt.NDArray[npt.Float32]
+    detection_class: npt.NDArray[npt.Int32]
+    detection_score: npt.NDArray[npt.Float32]
+    cumsum: npt.NDArray[npt.Float32]
+    poly_coef: npt.NDArray[npt.Float32]
+    poly_domain: npt.NDArray[npt.Float32]
+    poly_roots: npt.NDArray[npt.Float32]
+    poly_degree: int
 
     def to_dict(self) -> Dict[str, Any]:
         return self._asdict()
 
-    def with_failure_count(self, failure_count: int):
-        _kwargs = self.to_dict()
-        _kwargs.update(dict(failure_count=failure_count))
-        return self.__class__(**_kwargs)
+    def to_bytes(self):
+        return pyarrow.serialize(self)
+
+    def to_parquetio_serializable(self):
+        """
+        apache_beam.io.parquetio expects a dicts of native python types as input
+        TODO Investigate next steps...
+        Write custom parquetio transform to handle my Flatbuffer schemas?
+        Extend apache_beam.coders.coders Base?
+
+        Beam monkey-patches dill
+        https://github.com/apache/beam/blob/master/sdks/python/apache_beam/internal/pickler.py
+        Apache arrow falls back to standard lib pickle
+        https://arrow.apache.org/docs/python/ipc.html#serializing-custom-data-types
+        """
+
+        pass
 
     @staticmethod
     def pyarrow_fields():
         return [
             ("session", pa.string()),
             ("metadata", Metadata.pyarrow_struct()),
-            ("record_df", pa.list_(WindowedHealthDataFrameRow.pyarrow_struct())),
+            ("health_score", pa.list_(pa.float32())),
+            ("health_weight", pa.list_(pa.float32())),
+            ("detection_class", pa.list_(pa.float32())),
+            ("detection_score", pa.list_(pa.float32())),
             ("cumsum", pa.list_(pa.float32())),
-            ("failure_count", pa.int64()),
-            ("trend", HealthTrend.pyarrow_struct()),
+            ("poly_coef", pa.list_(pa.float32())),
+            ("poly_domain", pa.list_(pa.float32())),
+            ("poly_roots", pa.list_(pa.float32())),
+            ("poly_degree", pa.int32()),
         ]
 
     @classmethod
