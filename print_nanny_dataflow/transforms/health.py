@@ -96,8 +96,8 @@ class ExplodeWindowedHealthRecord(beam.DoFn):
         window_end = int(window.end)
 
         metadata = Metadata(
-            session=element.session,
             client_version=element.client_version,
+            session=element.session,
             user_id=element.user_id,
             device_id=element.device_id,
             device_cloudiot_id=element.device_cloudiot_id,
@@ -239,15 +239,23 @@ class ShouldPublishAlert(beam.DoFn):
         window=beam.DoFn.WindowParam,
         pane_info=beam.DoFn.PaneInfoParam,
     ):
-        key, value = element
+        key, values = element
         # publish video rendering message
-        if pane_info.last:
-            yield value | beam.Map(lambda e: e.to_bytes()) | beam.io.WriteToPubSub(
-                self.pubsub_topic
-            )
+        if pane_info.is_last:
+            pending_alert = PendingAlert(
+                session=key, metadata=values[0].metadata
+            ).to_bytes()
+            yield [pending_alert] | beam.Map(
+                lambda e: e.to_bytes()
+            ) | beam.io.WriteToPubSub(self.pubsub_topic)
         # @TODO analyze production distribution and write alert behavior for session panes
         else:
-            pass
+            pending_alert = PendingAlert(
+                session=key, metadata=values[0].metadata
+            ).to_bytes()
+            yield [pending_alert] | beam.Map(
+                lambda e: e.to_bytes()
+            ) | beam.io.WriteToPubSub(self.pubsub_topic)
 
 
 class MonitorHealthStateful(beam.DoFn):

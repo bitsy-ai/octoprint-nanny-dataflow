@@ -319,8 +319,8 @@ if __name__ == "__main__":
                 accumulation_mode=beam.transforms.trigger.AccumulationMode.ACCUMULATING,
             )
             | beam.GroupByKey()
-            | "Stateful health score threshold monitor"
-            >> beam.ParDo(MonitorHealthStateful(output_topic_path))
+            # | "Stateful health score threshold monitor"
+            # >> beam.ParDo(MonitorHealthStateful(output_topic_path))
         )
 
         on_session_end = (

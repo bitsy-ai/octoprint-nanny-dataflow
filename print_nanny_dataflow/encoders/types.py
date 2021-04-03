@@ -53,6 +53,8 @@ class Metadata(NamedTuple):
     window_start: int
     window_end: int
 
+    def to_dict(self):
+        return self._asdict()
     @staticmethod
     def pyarrow_fields():
         return [
@@ -77,6 +79,20 @@ class Metadata(NamedTuple):
 class PendingAlert(NamedTuple):
     session: str
     metadata: Metadata
+
+    def get_filepattern(self, input_path):
+        return os.path.join(input_path, self.session, "*")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return self._asdict()
+
+    def to_bytes(self):
+        metadata = self.metadata.to_dict()
+        return pa.serialize(dict(metadata=metadata, session=self.session)).to_buffer()
+
+    @staticmethod
+    def from_bytes(pyarrow_bytes):
+        return pa.deserialize(pyarrow_bytes)
 
     @staticmethod
     def pyarrow_fields():
@@ -171,7 +187,11 @@ class NestedWindowedHealthTrend(NamedTuple):
         return self._asdict()
 
     def to_bytes(self):
-        return pyarrow.serialize(self)
+        return pa.serialize(self.to_dict()).to_buffer()
+
+    @classmethod
+    def from_bytes(cls, pyarrow_bytes):
+        return pa.deserialize(pyarrow_bytes)
 
     def to_parquetio_serializable(self):
         """
@@ -299,6 +319,13 @@ class DeviceCalibration(NamedTuple):
         return NestedTelemetryEvent.__class__(**_kwargs)
 
 
+class AnnotatedImage(NamedTuple):
+    ts: int
+    session: str
+    metadata: Metadata
+    annotated_image_data: bytes
+
+
 class NestedTelemetryEvent(NamedTuple):
     """
     1 NestedTelemetryEvent : 1 Monitoring Frame
@@ -308,11 +335,9 @@ class NestedTelemetryEvent(NamedTuple):
     client_version: str
     session: str
 
-    # Metadata
     user_id: int
     device_id: int
     device_cloudiot_id: int
-
     # BoundingBoxes
     detection_scores: npt.NDArray[npt.Float32]
     detection_classes: npt.NDArray[npt.Int32]
@@ -406,17 +431,14 @@ class NestedTelemetryEvent(NamedTuple):
             ]
 
         image_data = obj.eventData.image.data.tobytes()
+        session = obj.metadata.session.decode("utf-8")
         return cls(
             ts=obj.metadata.ts,
-            session=obj.metadata.session.decode("utf-8"),
-            client_version=obj.metadata.clientVersion.decode("utf-8"),
+            session=session,
             image_height=obj.eventData.image.height,
             image_width=obj.eventData.image.width,
             image_tensor=tf.expand_dims(tf.io.decode_jpeg(image_data), axis=0),
             image_data=image_data,
-            user_id=obj.metadata.userId,
-            device_id=obj.metadata.deviceId,
-            device_cloudiot_id=obj.metadata.deviceCloudiotId,
             detection_scores=scores,
             detection_classes=classes,
             num_detections=num_detections,
@@ -424,6 +446,10 @@ class NestedTelemetryEvent(NamedTuple):
             boxes_xmin=boxes_xmin,
             boxes_ymax=boxes_ymax,
             boxes_xmax=boxes_xmax,
+            user_id=obj.metadata.userId,
+            device_id=obj.metadata.deviceId,
+            device_cloudiot_id=obj.metadata.deviceCloudiotId,
+            client_version=obj.metadata.clientVersion.decode("utf-8"),
         )
 
     def to_dict(self) -> Dict[str, Any]:
