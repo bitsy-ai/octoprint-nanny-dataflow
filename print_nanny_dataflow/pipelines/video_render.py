@@ -213,6 +213,9 @@ class AnnotateImage(beam.DoFn):
     ) -> Iterable[Tuple[str, AnnotatedImage]]:
         window_start = int(window.start)
         window_end = int(window.end)
+        import pdb
+
+        pdb.set_trace()
         yield (
             elements
             | "Filter area of interest and detections above threshold"
@@ -229,7 +232,9 @@ class AnnotateImage(beam.DoFn):
 
 
 class WriteTmpJpgs(beam.DoFn):
-    def process(self, element: Tuple[str, AnnotatedImage]) -> Iterable[Tuple[str, str]]:
+    def process(
+        self, element: Tuple[str, Iterable[AnnotatedImage]]
+    ) -> Iterable[Tuple[str, Iterable[str]]]:
         key, value
         yield key, (
             value
@@ -257,7 +262,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--parquet-input",
-        default="gs://print-nanny-sandbox/dataflow/telemetry_event/fixed_window/parquet",
+        default="gs://print-nanny-sandbox/dataflow/telemetry_event/fixed_window/NestedTelemetryEvent/parquet",
         help="Read monitoring frames from GCS bucket",
     )
 
@@ -273,8 +278,12 @@ if __name__ == "__main__":
         "--api-url", default="https://print-nanny.com/api", help="Print Nanny API url"
     )
     parser.add_argument(
-        "--video-upload-path",
-        default="gs://print-nanny-sandbox/public/uploads/defect_alert",
+        "--defect-video-upload-path",
+        default="gs://print-nanny-sandbox/public/uploads/DefectAlert",
+    )
+    parser.add_argument(
+        "--session-video-upload-path",
+        default="gs://print-nanny-sandbox/public/uploads/PrintSessionAlert",
     )
 
     parser.add_argument("--runner", default="DataflowRunner")
@@ -296,8 +305,11 @@ if __name__ == "__main__":
             | f"Read from {input_topic_path}"
             >> beam.io.ReadFromPubSub(topic=input_topic_path)
             | "Decode bytes" >> beam.Map(lambda b: CreateVideoMessage.from_bytes(b))
-            | beam.Map(lambda x: x.get_filepattern())
-            | beam.io.ReadAllFromParquet().with_output_types(NestedTelemetryEvent)
+            | beam.Map(lambda x: os.path.join(args.parquet_input, x.session, "*"))
+            | beam.io.ReadAllFromParquet()
+            | beam.Map(lambda x: NestedTelemetryEvent.from_dict(x)).with_output_types(
+                NestedTelemetryEvent
+            )
         )
 
         annotated_images = (
@@ -308,8 +320,9 @@ if __name__ == "__main__":
                     args.calibration_base_path,
                 )
             )
-            | "Write jpgs to disk" >> (beam.ParDo(WriteTmpJpgs()) | beam.GroupByKey())
-            | "Create mp4" >> beam.ParDo(RenderVideo(args.video_upload_path))
+            | "Render videos from jpgs" >> beam.GroupByKey()
+            | beam.ParDo(WriteTmpJpgs())
+            | beam.ParDo(RenderVideo(args.session_video_upload_path))
         )
 
         rendered_videos = annotated_images | beam.Map(lambda x: x.annotated_image_data)

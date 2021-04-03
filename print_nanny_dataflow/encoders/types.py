@@ -75,29 +75,35 @@ class CreateVideoMessage(NamedTuple):
     metadata: Metadata
     alert_type: AlertMessageType
 
-    def get_filepattern(self, input_path):
-        return os.path.join(input_path, self.session, "*")
-
     def to_dict(self) -> Dict[str, Any]:
         return self._asdict()
 
     def to_bytes(self):
         metadata = self.metadata.to_dict()
         return (
-            pa.serialize(dict(metadata=metadata, session=self.session))
+            pa.serialize(
+                dict(
+                    metadata=metadata,
+                    session=self.session,
+                    alert_type=self.alert_type.value,
+                )
+            )
             .to_buffer()
             .to_pybytes()
         )
 
-    @staticmethod
-    def from_bytes(pyarrow_bytes):
-        return pa.deserialize(pyarrow_bytes)
+    @classmethod
+    def from_bytes(cls, pyarrow_bytes):
+        data = pa.deserialize(pyarrow_bytes)
+        data["metadata"] = Metadata(**data["metadata"])
+        return cls(**data)
 
     @staticmethod
     def pyarrow_fields():
         return [
             ("session", pa.string()),
             ("metadata", Metadata.pyarrow_struct()),
+            ("alert_type", pa.int32()),
         ]
 
     @classmethod
@@ -190,7 +196,7 @@ class NestedWindowedHealthTrend(NamedTuple):
 
     @classmethod
     def from_bytes(cls, pyarrow_bytes):
-        return pa.deserialize(pyarrow_bytes)
+        return cls(**pa.deserialize(pyarrow_bytes))
 
     def to_parquetio_serializable(self):
         """
@@ -453,6 +459,12 @@ class NestedTelemetryEvent(NamedTuple):
 
     def to_dict(self) -> Dict[str, Any]:
         return self._asdict()
+
+    @classmethod
+    def from_dict(cls, data):
+        metadata = Metadata(**data["metadata"])
+        data["metadata"] = metadata
+        return cls(**data)
 
     def to_dataframe(self) -> pd.DataFrame:
         return pd.DataFrame(self.to_dict())
