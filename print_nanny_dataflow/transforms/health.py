@@ -230,32 +230,25 @@ class SortWindowedHealthDataframe(beam.DoFn):
 
 
 class ShouldPublishAlert(beam.DoFn):
-    def __init__(self, pubsub_topic):
-        self.pubsub_topic = pubsub_topic
-
     def process(
         self,
         element=Tuple[Any, Iterable[NestedWindowedHealthTrend]],
         window=beam.DoFn.WindowParam,
         pane_info=beam.DoFn.PaneInfoParam,
-    ):
+    ) -> Iterable[bytes]:
         key, values = element
         # publish video rendering message
         if pane_info.is_last:
             pending_alert = PendingAlert(
                 session=key, metadata=values[0].metadata
             ).to_bytes()
-            yield [pending_alert] | beam.Map(
-                lambda e: e.to_bytes()
-            ) | beam.io.WriteToPubSub(self.pubsub_topic)
+            yield pending_alert
         # @TODO analyze production distribution and write alert behavior for session panes
         else:
             pending_alert = PendingAlert(
                 session=key, metadata=values[0].metadata
             ).to_bytes()
-            yield [pending_alert] | beam.Map(
-                lambda e: e.to_bytes()
-            ) | beam.io.WriteToPubSub(self.pubsub_topic)
+            yield pending_alert
 
 
 class MonitorHealthStateful(beam.DoFn):

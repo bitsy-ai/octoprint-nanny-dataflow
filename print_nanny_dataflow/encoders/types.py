@@ -55,6 +55,7 @@ class Metadata(NamedTuple):
 
     def to_dict(self):
         return self._asdict()
+
     @staticmethod
     def pyarrow_fields():
         return [
@@ -88,7 +89,11 @@ class PendingAlert(NamedTuple):
 
     def to_bytes(self):
         metadata = self.metadata.to_dict()
-        return pa.serialize(dict(metadata=metadata, session=self.session)).to_buffer()
+        return (
+            pa.serialize(dict(metadata=metadata, session=self.session))
+            .to_buffer()
+            .to_pybytes()
+        )
 
     @staticmethod
     def from_bytes(pyarrow_bytes):
@@ -187,7 +192,7 @@ class NestedWindowedHealthTrend(NamedTuple):
         return self._asdict()
 
     def to_bytes(self):
-        return pa.serialize(self.to_dict()).to_buffer()
+        return pa.serialize(self.to_dict()).to_buffer().to_pybytes()
 
     @classmethod
     def from_bytes(cls, pyarrow_bytes):
