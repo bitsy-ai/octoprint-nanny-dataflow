@@ -74,7 +74,8 @@ class CreateVideoMessage(NamedTuple):
     session: str
     metadata: Metadata
     alert_type: AlertMessageType
-    gcs_prefix: str
+    gcs_prefix_in: str
+    gcs_prefix_out: str
 
     def to_dict(self) -> Dict[str, Any]:
         return self._asdict()
@@ -87,7 +88,9 @@ class CreateVideoMessage(NamedTuple):
                     metadata=metadata,
                     session=self.session,
                     alert_type=self.alert_type.value,
-                    gcs_prefix=self.gcs_prefix,
+                    gcs_prefix_in=self.gcs_prefix_in,
+                    gcs_prefix_out=self.gcs_prefix_out,
+
                 )
             )
             .to_buffer()

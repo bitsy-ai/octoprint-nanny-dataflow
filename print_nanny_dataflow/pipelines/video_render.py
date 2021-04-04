@@ -13,6 +13,7 @@ from typing import (
     Optional,
     NamedTuple,
 )
+from timeit import timeit
 import tempfile
 import apache_beam as beam
 from apache_beam.options.pipeline_options import PipelineOptions
@@ -31,6 +32,11 @@ from print_nanny_dataflow.encoders.types import (
     CreateVideoMessage,
     Metadata,
 )
+from apache_beam.transforms.trigger import (
+    AfterCount,
+    AfterWatermark,
+    AfterAny
+)
 from print_nanny_dataflow.utils.visualization import (
     visualize_boxes_and_labels_on_image_array,
 )
@@ -39,28 +45,21 @@ from print_nanny_dataflow.transforms.health import FilterAreaOfInterest
 logger = logging.getLogger(__name__)
 
 
+class FileSpec(NamedTuple):
+    session: str
+    gcs_prefix: str
+    gcs_outfile: str
+
 class RenderVideoTriggerAlert(beam.DoFn):
     def __init__(
         self,
-        fixed_window_sink,
         video_upload_path,
-        calibration_base_path,
         api_url,
         api_token,
-        max_batches=3,
-        category_index=CATEGORY_INDEX,
-        score_threshold=0.5,
-        max_boxes_to_draw=10,
     ):
-        self.fixed_window_sink = fixed_window_sink
-        self.max_batches = max_batches
         self.api_url = api_url
         self.api_token = api_token
-        self.category_index = category_index
-        self.score_threshold = score_threshold
-        self.max_boxes_to_draw = max_boxes_to_draw
         self.video_upload_path = video_upload_path
-        self.calibration_base_path = calibration_base_path
 
     async def trigger_alert_async(self, session: str):
         rest_client = RestAPIClient(api_token=self.api_token, api_url=self.api_url)
@@ -80,22 +79,20 @@ class RenderVideoTriggerAlert(beam.DoFn):
             asyncio.set_event_loop(loop)
         loop.run_until_complete(self.trigger_alert_async(session))
 
+    def should_alert(self, session):
+        logging.info(f"should_alert=True for session={session}")
+        return True
+    def process(self, elements: Iterable[Tuple[str, TmpFileSpec]]):
+        key, values = elements
 
-class TmpFileSpec(NamedTuple):
-    session: str
-    gcs_prefix: str
-    gcs_file_list: str
-    local_filepattern: str
-    local_tmp_dir: str
-    gcs_outfile: str
-
+        local_filepattern = values[0]
 
 class CreateTmpFileSpec(beam.DoFn):
     def __init__(self, video_upload_path, pipeline_options):
         self.video_upload_path = video_upload_path
         self.pipeline_options = pipeline_options
 
-    def process(self, element: CreateVideoMessage):
+    def process(self, element: CreateVideoMessage) -> Iterable[Tuple[str, TmpFileSpec]]:
 
         gcs_client = beam.io.gcp.gcsio.GcsIO()
         gcsfs = beam.io.gcp.gcsfilesystem.GCSFileSystem(self.pipeline_options)
@@ -111,16 +108,17 @@ class CreateTmpFileSpec(beam.DoFn):
         )
 
         local_tmp_dir = tempfile.mkdtemp(suffix=f"_{element.session}")
-        local_filepattern = os.path.join(local_tmp_dir, "*.jpg")
+        local_infilepattern = os.path.join(local_tmp_dir, "*.jpg")
+        local_outfile = os.path.join(local_tmp_dir, f"{element.session}.mp4")
         tmp_spec = TmpFileSpec(
             session=element.session,
             gcs_prefix=element.gcs_prefix,
             gcs_outfile=gcs_outfile,
             gcs_file_list=file_list,
-            local_filepattern=local_filepattern,
+            local_infilepattern=local_infilepattern,
             local_tmp_dir=local_tmp_dir,
+            local_outfile=local_outfile
         )
-        logger.info(f"Created tmp file spec {tmp_spec}")
         yield element.session, tmp_spec
         # | beam.Map(lambda filename: beam.io.gcp.gcsfilesystem.GCSFileSystem)
         # with gcs_client.open(outpath, "wb") as f:
@@ -135,40 +133,63 @@ class DownloadTmpFileSpec(beam.DoFn):
     def __init__(self, pipeline_options):
         self.pipeline_options = pipeline_options
 
-    def write(filename: str, data: bytes, tmp_dir: str):
-        localfs = beam.io.localfilesystem.LocalFileSystem(self.pipeline_options)
-        outfile = os.path.join(tmp_dir, filename)
-        with localfs.create(outfile) as f:
-            f.write(data)
-        yield outfile
+    # def write(filename: str, data: bytes, tmp_dir: str) -> Iterable[Tuple[str, TmpFileSpec]]:
+    #     localfs = beam.io.localfilesystem.LocalFileSystem(self.pipeline_options)
+    #     outfile = os.path.join(tmp_dir, filename)
+    #     with localfs.create(outfile) as f:
+    #         f.write(data)
+    #     return (spec.session, outfile)
 
-    def read(self, infile: str):
+    def local_copy(self, key: str, infile: str, tmp_dir: str) -> Iterable[Tuple[str, bytes]]:
         gcsfs = beam.io.gcp.gcsfilesystem.GCSFileSystem(self.pipeline_options)
-        filename = gcsfs.split(infile)
+        localfs = beam.io.localfilesystem.LocalFileSystem(self.pipeline_options)
+
+        head, filename = gcsfs.split(infile)
+        outfile = os.path.join(tmp_dir, filename)
         with gcsfs.open(infile) as f:
             data = f.read()
-        yield filename, data
+        with localfs.create(outfile) as f:
+            f.write(data)
+        return (key, outfile)
+    
+    def create_video(self, key: str, infilepattern:str, outfile: str):
+        logging.info(f"Begin rendering video for session={key} outfile={outfile}")
+        timing = timeit(lambda: ffmpeg.input(infilepattern, pattern_type="glob").output(outfile).run())
+        logging.info(f"Finished rendering video session={key} outfile={outfile} in seconds={timing}")
+        return key, outfile
+    
+    def upload(self, infile: str, outfile: str):
+        gcsfs = beam.io.gcp.gcsfilesystem.GCSFileSystem(self.pipeline_options)
+        localfs = beam.io.localfilesystem.LocalFileSystem(self.pipeline_options)
+
+        with localfs.open(infile) as local_f:
+            data = local_f.read()
+        with gcsfs.create(outfile) as remote_f:
+            remote_f.write(data)
+        logger.info(f"Finished uploading {outfile}")
+        return outfile
 
     def process(self, element: Tuple[str, Iterable[TmpFileSpec]]):
-        key, value = elements
+        key, values = element
 
-        local_tmp_dir = value[0].local_tmp_dir
+        local_tmp_dir = values[0].local_tmp_dir
+        local_infilepattern = values[0].local_infilepattern
+        local_outfile = values[0].local_outfile
+        gcs_outfile = values[0].gcs_outfile
+        logger.info(f"Writing session={key} tmp files to {local_tmp_dir}")
 
         yield key, (
-            elements
+            values
             | beam.FlatMap(lambda x: x.gcs_file_list)
-            | beam.Map(self.read)
             | beam.Map(
-                lambda filename, data: self.write_to_tmp(filename, data, local_tmp_dir)
+                lambda filename: self.local_copy(key, filename, local_tmp_dir)
             )
+            | beam.GroupByKey() | beam.MapTuple(lambda key, outfiles: self.create_video(key, local_infilepattern, local_outfile))
+            | beam.MapTuple(lambda key, _: self.upload(local_outfile, gcs_outfile))
         )
 
-
-def download_tmp_filespec(key: str, spec: TmpFileSpec, pipeline_options):
-    localfs = beam.io.localfilesystem.LocalFileSystem(self.pipeline_options)
-    outfile = os.path.join(tmp_dir, filename)
-    with localfs.create(outfile) as f:
-        f.write(data)
+class RenderVideo(beam.ParDo):
+    def process(self, spec: TmpFileSpec):
 
 
 if __name__ == "__main__":
@@ -211,6 +232,11 @@ if __name__ == "__main__":
         default="gs://print-nanny-sandbox/dataflow/telemetry_event/fixed_window/NestedTelemetryEvent/mp4",
     )
 
+    parser.add_argument(
+        "--session-gap",
+        default=300,
+    )
+
     parser.add_argument("--runner", default="DataflowRunner")
 
     args, pipeline_args = parser.parse_known_args()
@@ -225,17 +251,36 @@ if __name__ == "__main__":
     )
 
     with beam.Pipeline(options=beam_options) as p:
-        tmp_local_files_by_session = (
+        # TODO adjust window 
+        alert_pipeline_trigger = AfterAny(
+            AfterCount(1),
+            AfterWatermark(
+            late=AfterCount(1)
+        ))
+        tmp_file_spec_by_session = (
             p
             | f"Read from {input_topic_path}"
             >> beam.io.ReadFromPubSub(topic=input_topic_path)
+            | beam.WindowInto(
+                beam.transforms.window.Sessions(args.session_gap),
+                trigger=alert_pipeline_trigger,
+                accumulation_mode=beam.transforms.trigger.AccumulationMode.DISCARDING,
+            )
             | "Decode bytes" >> beam.Map(lambda b: CreateVideoMessage.from_bytes(b))
-            | "Create a spec of remote/local file patterns"
-            >> beam.ParDo(CreateTmpFileSpec(args.video_upload_path, beam_options))
-            | beam.GroupByKey()
-            | "Download images" >> beam.ParDo(DownloadTmpFileSpec(beam_options))
-            | beam.Map(print)
+            | "Run render_video.sh" >> beam.ParDo(RenderVideo())
+            # | "Create a spec of remote/local file patterns"
+            # >> beam.ParDo(CreateTmpFileSpec(args.video_upload_path, beam_options))
+            # | beam.GroupByKey().with_output_types(Tuple[str, TmpFileSpec])
+            # | "Download images" >> beam.ParDo(DownloadTmpFileSpec(beam_options))
         )
+
+        # video_render_pipeline = (
+        #     tmp_file_spec_by_session
+        #     | beam.FlatMapTuple(lambda key, spec: spec.gcs_file_list | beam.Map(lambda f: local_copy(key, spec, f, beam_options))) | beam.GroupByKey() | beam.MapTuple(lambda key, specs: (key, specs[0]))
+        #     | beam.MapTuple(create_video)
+        #     | beam.MapTuple(lambda key, spec: upload(key, spec, beam_options))
+        # )
+
 
         # annotated_images = (
         #     frames_by_session
