@@ -38,8 +38,8 @@ class Metadata(NamedTuple):
     user_id: int
     device_id: int
     device_cloudiot_id: int
-    window_start: int
-    window_end: int
+    window_start: int = None
+    window_end: int = None
 
     def to_dict(self):
         return self._asdict()
@@ -462,8 +462,6 @@ class NestedTelemetryEvent(NamedTuple):
 
     @classmethod
     def from_dict(cls, data):
-        metadata = Metadata(**data["metadata"])
-        data["metadata"] = metadata
         return cls(**data)
 
     def to_dataframe(self) -> pd.DataFrame:

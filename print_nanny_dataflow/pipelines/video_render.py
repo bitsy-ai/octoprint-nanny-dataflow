@@ -1,11 +1,12 @@
 import logging
 import argparse
 import os
+import io
 from typing import List, Tuple, Any, Iterable, Generator, Coroutine, Optional
 
 import apache_beam as beam
 from apache_beam.options.pipeline_options import PipelineOptions
-
+import PIL
 import pandas as pd
 import numpy as np
 from print_nanny_dataflow.encoders.types import (
@@ -17,7 +18,12 @@ from print_nanny_dataflow.encoders.types import (
     CATEGORY_INDEX,
     NestedWindowedHealthTrend,
     CreateVideoMessage,
+    Metadata,
 )
+from print_nanny_dataflow.utils.visualization import (
+    visualize_boxes_and_labels_on_image_array,
+)
+from print_nanny_dataflow.transforms.health import FilterAreaOfInterest
 
 logger = logging.getLogger(__name__)
 
@@ -63,86 +69,6 @@ class RenderVideoTriggerAlert(beam.DoFn):
             asyncio.set_event_loop(loop)
         loop.run_until_complete(self.trigger_alert_async(session))
 
-    def annotate_image(self, event: NestedTelemetryEvent):
-        image_np = np.array(PIL.Image.open(io.BytesIO(event.image_data)))
-        if event.calibration is None:
-            annotated_image_data = visualize_boxes_and_labels_on_image_array(
-                image_np,
-                event.detection_boxes,
-                event.detection_classes,
-                event.detection_scores,
-                self.category_index,
-                use_normalized_coordinates=True,
-                line_thickness=4,
-                min_score_thresh=self.score_threshold,
-                max_boxes_to_draw=self.max_boxes_to_draw,
-            )
-        else:
-            detection_boundary_mask = self.calibration["mask"]
-            ignored_mask = np.invert(detection_boundary_mask)
-            annotated_image_data = visualize_boxes_and_labels_on_image_array(
-                image_np,
-                event.detection_boxes,
-                event.detection_classes,
-                event.detection_scores,
-                self.category_index,
-                use_normalized_coordinates=True,
-                line_thickness=4,
-                min_score_thresh=self.score_threshold,
-                max_boxes_to_draw=self.max_boxes_to_draw,
-                detection_boundary_mask=detection_boundary_mask,
-                detection_box_ignored=ignored_mask,
-            )
-        return event.session, NestedTelemetryEvent(
-            annotated_image_data=annotated_image_data, **event.to_dict()
-        )
-
-    def write_video(
-        self,
-        keyed_elements: Tuple[str, Iterable[NestedTelemetryEvent]],
-        window_start: int,
-        window_end: int,
-    ) -> str:
-
-        output_path = os.path.join(
-            self.video_upload_path, session, f"{window_start}_{window_end}.mp4"
-        )
-        gcs_client = beam.io.gcp.gcsio.GcsIO()
-
-        with gcs_client.open(output_path, "wb+") as f:
-            writer = imageio.get_writer(f, mode="I")
-            for i, value in df["annotated_image"].iteritems():
-                writer.append_data(value)
-            writer.close()
-        yield output_path
-
-    def process(
-        self,
-        keyed_elements: Tuple[str, Iterable[NestedTelemetryEvent]],
-        window=beam.DoFn.WindowParam,
-    ):
-        session, elements = keyed_elements
-        window_start = int(window.start)
-        window_end = int(window.end)
-        yield (
-            elements
-            | "Filter area of interest and detections above threshold"
-            | "Group by session"
-            >> beam.GroupBy("session")
-            >> beam.ParDo(
-                FilterAreaOfInterest(
-                    self.calibration_base_path,
-                    score_threshold=self.score_threshold,
-                    output_calibration=True,
-                )
-            )
-            | "Transform to DataFrame"
-            >> DataframeTransform(lambda df: df.sort_values("ts", inplace=True))
-            | "Add annotated image keyed by session"
-            >> beam.Map(self.annotate_image).with_output_types(NestedTelemetryEvent)
-            | "Render and write video" >> beam.CombineValues(self.write_video)
-        )
-
 
 class RenderVideo(beam.DoFn):
     def __init__(self, video_upload_path):
@@ -167,14 +93,13 @@ class AnnotateImage(beam.DoFn):
         self.max_boxes_to_draw = max_boxes_to_draw
         self.calibration_base_path = calibration_base_path
 
-    def annotate_image(
-        self, event: NestedTelemetryEvent
-    ) -> Iterable[Tuple[str, AnnotatedImage]]:
+    def annotate_image(self, event: NestedTelemetryEvent) -> Tuple[str, AnnotatedImage]:
         image_np = np.array(PIL.Image.open(io.BytesIO(event.image_data)))
+
         if event.calibration is None:
             annotated_image_data = visualize_boxes_and_labels_on_image_array(
                 image_np,
-                event.detection_boxes,
+                event.detection_boxes(),
                 event.detection_classes,
                 event.detection_scores,
                 self.category_index,
@@ -188,7 +113,7 @@ class AnnotateImage(beam.DoFn):
             ignored_mask = np.invert(detection_boundary_mask)
             annotated_image_data = visualize_boxes_and_labels_on_image_array(
                 image_np,
-                event.detection_boxes,
+                event.detection_boxes(),
                 event.detection_classes,
                 event.detection_scores,
                 self.category_index,
@@ -199,8 +124,15 @@ class AnnotateImage(beam.DoFn):
                 detection_boundary_mask=detection_boundary_mask,
                 detection_box_ignored=ignored_mask,
             )
+        metadata = Metadata(
+            client_version=event.client_version,
+            session=event.session,
+            user_id=event.user_id,
+            device_id=event.device_id,
+            device_cloudiot_id=event.device_cloudiot_id,
+        )
         return event.session, AnnotatedImage(
-            metadata=event.metadata,
+            metadata=metadata,
             ts=event.ts,
             session=event.session,
             annotated_image_data=annotated_image_data,
@@ -208,20 +140,15 @@ class AnnotateImage(beam.DoFn):
 
     def process(
         self,
-        elements: NestedTelemetryEvent,
+        elements: Tuple[str, Iterable[NestedTelemetryEvent]],
         window=beam.DoFn.WindowParam,
-    ) -> Iterable[Tuple[str, AnnotatedImage]]:
-        window_start = int(window.start)
-        window_end = int(window.end)
-        import pdb
-
-        pdb.set_trace()
-        yield (
-            elements
+    ) -> Iterable[Tuple[str, Iterable[AnnotatedImage]]]:
+        key, values = elements
+        logger.info(f"Starting annotation of frames for session={key}")
+        yield key, (
+            values
             | "Filter area of interest and detections above threshold"
-            | "Group by session"
-            >> beam.GroupBy("session")
-            >> beam.ParDo(
+            | beam.ParDo(
                 FilterAreaOfInterest(
                     self.calibration_base_path,
                     score_threshold=self.score_threshold,
@@ -231,19 +158,19 @@ class AnnotateImage(beam.DoFn):
         )
 
 
-class WriteTmpJpgs(beam.DoFn):
-    def process(
-        self, element: Tuple[str, Iterable[AnnotatedImage]]
-    ) -> Iterable[Tuple[str, Iterable[str]]]:
-        key, value
-        yield key, (
-            value
-            | beam.io.fileio.WriteToFiles(
-                path="/tmp/annotated_frames",
-                destination=lambda x: x.session,
-                file_naming=beam.io.destination_prefix_naming(suffix=".jpg"),
-            ),
-        )
+# class WriteTmpJpgs(beam.DoFn):
+#     def process(
+#         self, element: Tuple[str, Iterable[AnnotatedImage]]
+#     ) -> Iterable[Tuple[str, Iterable[str]]]:
+#         key, value
+#         yield tuple((key, (
+#             value
+#             | beam.io.fileio.WriteToFiles(
+#                 path="/tmp/annotated_frames",
+#                 destination=lambda x: x.session,
+#                 file_naming=beam.io.destination_prefix_naming(suffix=".jpg"),
+#             )
+#         )))
 
 
 if __name__ == "__main__":
@@ -307,22 +234,27 @@ if __name__ == "__main__":
             | "Decode bytes" >> beam.Map(lambda b: CreateVideoMessage.from_bytes(b))
             | beam.Map(lambda x: os.path.join(args.parquet_input, x.session, "*"))
             | beam.io.ReadAllFromParquet()
-            | beam.Map(lambda x: NestedTelemetryEvent.from_dict(x)).with_output_types(
-                NestedTelemetryEvent
-            )
-        )
-
-        annotated_images = (
-            frames_by_session
+            | beam.Map(lambda x: (x["session"], NestedTelemetryEvent.from_dict(x)))
+            | beam.GroupByKey()
             | "Annotate images"
             >> beam.ParDo(
                 AnnotateImage(
                     args.calibration_base_path,
                 )
             )
-            | "Render videos from jpgs" >> beam.GroupByKey()
-            | beam.ParDo(WriteTmpJpgs())
-            | beam.ParDo(RenderVideo(args.session_video_upload_path))
         )
 
-        rendered_videos = annotated_images | beam.Map(lambda x: x.annotated_image_data)
+        # annotated_images = (
+        #     frames_by_session
+        #     | "Annotate images"
+        #     >> beam.ParDo(
+        #         AnnotateImage(
+        #             args.calibration_base_path,
+        #         )
+        #     ) | beam.MapTuple(lambda session,x: print(session))
+        # | "Write tmp jpg files" >> beam.MapTuple(lambda key, value: (key, values | beam.io.fileio.WriteToFiles(
+        #     path="/tmp/annotated_frames",
+        #     destination=lambda x: x.session,
+        #     file_naming=beam.io.destination_prefix_naming(suffix=".jpg"),
+        # )))
+        # | "Render video from tmp files" >> beam.ParDo(RenderVideo(args.session_video_upload_path))

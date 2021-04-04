@@ -51,6 +51,8 @@ from print_nanny_dataflow.transforms.health import (
     ShouldPublishAlert,
 )
 
+from print_nanny_dataflow.transforms.video import WriteAnnotatedImage
+
 from print_nanny_dataflow.encoders.types import (
     NestedTelemetryEvent,
     WindowedHealthRecord,
@@ -134,6 +136,12 @@ if __name__ == "__main__":
         "--fixed-window-parquet-sink",
         default="gs://print-nanny-sandbox/dataflow/telemetry_event/fixed_window/NestedTelemetryEvent/parquet",
         help="Unfiltered NestedTelemetryEvent emitted from FixedWindow (single point in time)",
+    )
+
+    parser.add_argument(
+        "--fixed-window-jpg-sink",
+        default="gs://print-nanny-sandbox/dataflow/telemetry_event/fixed_window/NestedTelemetryEvent/jpg",
+        help="Bounding-box annotated images (single point in time)",
     )
 
     parser.add_argument(
@@ -250,17 +258,38 @@ if __name__ == "__main__":
             >> beam.WindowInto(
                 beam.transforms.window.FixedWindows(args.health_window_period)
             )
+        )
+
+        fixed_window_view_by_key = (
+            fixed_window_view
             | "Group FixedWindow NestedTelemetryEvent by key" >> beam.GroupByKey()
         )
 
-        _ = fixed_window_view | "Write FixedWindow TFRecords" >> beam.ParDo(
+        _ = (
+            fixed_window_view_by_key
+            | "Filter area of interest and detections above threshold"
+            >> beam.ParDo(
+                FilterAreaOfInterest(
+                    args.calibration_base_path,
+                )
+            )
+            | "Write annotated jpgs"
+            >> beam.ParDo(WriteAnnotatedImage(args.fixed_window_jpg_sink))
+            # | beam.MapTuple(lambda key, row: beam.io.fileio.WriteToFiles(
+            #     path=os.path.join(args.fixed_window_jpg_sink, key),
+            #     sink=lambda dest: beam.io.filebasedsink.FileBasedSink(file_path_prefix=dest, coder=beam.coders.BytesCoder),
+            #     file_naming=beam.io.fileio.destination_prefix_naming(suffix=".jpg"),
+            # )
+        )
+
+        _ = fixed_window_view_by_key | "Write FixedWindow TFRecords" >> beam.ParDo(
             WriteWindowedTFRecord(
                 args.fixed_window_tfrecord_sink,
                 NestedTelemetryEvent.tfrecord_schema(args.num_detections),
             )
         )
 
-        _ = fixed_window_view | "Write FixedWindow Parquet" >> beam.ParDo(
+        _ = fixed_window_view_by_key | "Write FixedWindow Parquet" >> beam.ParDo(
             WriteWindowedParquet(
                 args.fixed_window_parquet_sink,
                 NestedTelemetryEvent.pyarrow_schema(args.num_detections),
@@ -323,11 +352,11 @@ if __name__ == "__main__":
             # >> beam.ParDo(MonitorHealthStateful(output_topic_path))
         )
 
-        on_session_end = (
-            session_accumulating_dataframe
-            | "Should alert for session?" >> beam.ParDo(ShouldPublishAlert())
-            | "Write to PubSub" >> beam.io.WriteToPubSub(output_topic_path)
-        )
+        # on_session_end = (
+        #     session_accumulating_dataframe
+        #     | "Should alert for session?" >> beam.ParDo(ShouldPublishAlert())
+        #     | "Write to PubSub" >> beam.io.WriteToPubSub(output_topic_path)
+        # )
 
         _ = (
             session_accumulating_dataframe

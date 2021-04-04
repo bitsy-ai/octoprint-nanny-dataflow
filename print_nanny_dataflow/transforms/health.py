@@ -2,6 +2,7 @@ from typing import Tuple, Iterable, Optional, Any, NamedTuple
 import logging
 
 import os
+import io
 import numpy as np
 import pandas as pd
 import tensorflow as tf
@@ -145,7 +146,7 @@ class FilterAreaOfInterest(beam.DoFn):
 
     def process(
         self,
-        keyed_elements=beam.DoFn.ElementParam,
+        keyed_elements=Tuple[str, Iterable[NestedTelemetryEvent]],
         key=beam.DoFn.KeyParam,
     ) -> Iterable[NestedTelemetryEvent]:
         session, elements = keyed_elements
