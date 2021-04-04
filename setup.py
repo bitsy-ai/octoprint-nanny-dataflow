@@ -23,7 +23,8 @@ REQUIRES = [
     "pillow",
     "print_nanny_client>=0.5.0-dev60",
     "gcsfs",
-    "pyarrow>=3.0.0",
+    "pyarrow",
+    "pandas",
 ]
 
 setup(
