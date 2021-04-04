@@ -352,11 +352,12 @@ if __name__ == "__main__":
             # >> beam.ParDo(MonitorHealthStateful(output_topic_path))
         )
 
-        # on_session_end = (
-        #     session_accumulating_dataframe
-        #     | "Should alert for session?" >> beam.ParDo(ShouldPublishAlert())
-        #     | "Write to PubSub" >> beam.io.WriteToPubSub(output_topic_path)
-        # )
+        on_session_end = (
+            session_accumulating_dataframe
+            | "Should alert for session?"
+            >> beam.ParDo(ShouldPublishAlert(args.fixed_window_jpg_sink))
+            | "Write to PubSub" >> beam.io.WriteToPubSub(output_topic_path)
+        )
 
         _ = (
             session_accumulating_dataframe

@@ -2,11 +2,22 @@ import logging
 import argparse
 import os
 import io
-from typing import List, Tuple, Any, Iterable, Generator, Coroutine, Optional
-
+import imageio
+from typing import (
+    List,
+    Tuple,
+    Any,
+    Iterable,
+    Generator,
+    Coroutine,
+    Optional,
+    NamedTuple,
+)
+import tempfile
 import apache_beam as beam
 from apache_beam.options.pipeline_options import PipelineOptions
 import PIL
+import ffmpeg
 import pandas as pd
 import numpy as np
 from print_nanny_dataflow.encoders.types import (
@@ -70,107 +81,94 @@ class RenderVideoTriggerAlert(beam.DoFn):
         loop.run_until_complete(self.trigger_alert_async(session))
 
 
-class RenderVideo(beam.DoFn):
-    def __init__(self, video_upload_path):
+class TmpFileSpec(NamedTuple):
+    session: str
+    gcs_prefix: str
+    gcs_file_list: str
+    local_filepattern: str
+    local_tmp_dir: str
+    gcs_outfile: str
+
+
+class CreateTmpFileSpec(beam.DoFn):
+    def __init__(self, video_upload_path, pipeline_options):
         self.video_upload_path = video_upload_path
+        self.pipeline_options = pipeline_options
 
-    def process(self, keyed_elements: Tuple[str, Iterable[str]]):
+    def process(self, element: CreateVideoMessage):
 
-        key, values = keyed_elements
-        logger.info(values)
+        gcs_client = beam.io.gcp.gcsio.GcsIO()
+        gcsfs = beam.io.gcp.gcsfilesystem.GCSFileSystem(self.pipeline_options)
 
+        file_list = list(gcs_client.list_prefix(element.gcs_prefix).keys())
+        file_list.sort()
 
-class AnnotateImage(beam.DoFn):
-    def __init__(
-        self,
-        calibration_base_path,
-        category_index=CATEGORY_INDEX,
-        score_threshold=0.5,
-        max_boxes_to_draw=10,
-    ):
-        self.category_index = category_index
-        self.score_threshold = score_threshold
-        self.max_boxes_to_draw = max_boxes_to_draw
-        self.calibration_base_path = calibration_base_path
+        start_ts = gcsfs.split(file_list[0])[1].split(".")[0]
+        end_ts = gcsfs.split(file_list[-1])[1].split(".")[0]
 
-    def annotate_image(self, event: NestedTelemetryEvent) -> Tuple[str, AnnotatedImage]:
-        image_np = np.array(PIL.Image.open(io.BytesIO(event.image_data)))
-
-        if event.calibration is None:
-            annotated_image_data = visualize_boxes_and_labels_on_image_array(
-                image_np,
-                event.detection_boxes(),
-                event.detection_classes,
-                event.detection_scores,
-                self.category_index,
-                use_normalized_coordinates=True,
-                line_thickness=4,
-                min_score_thresh=self.score_threshold,
-                max_boxes_to_draw=self.max_boxes_to_draw,
-            )
-        else:
-            detection_boundary_mask = self.calibration["mask"]
-            ignored_mask = np.invert(detection_boundary_mask)
-            annotated_image_data = visualize_boxes_and_labels_on_image_array(
-                image_np,
-                event.detection_boxes(),
-                event.detection_classes,
-                event.detection_scores,
-                self.category_index,
-                use_normalized_coordinates=True,
-                line_thickness=4,
-                min_score_thresh=self.score_threshold,
-                max_boxes_to_draw=self.max_boxes_to_draw,
-                detection_boundary_mask=detection_boundary_mask,
-                detection_box_ignored=ignored_mask,
-            )
-        metadata = Metadata(
-            client_version=event.client_version,
-            session=event.session,
-            user_id=event.user_id,
-            device_id=event.device_id,
-            device_cloudiot_id=event.device_cloudiot_id,
-        )
-        return event.session, AnnotatedImage(
-            metadata=metadata,
-            ts=event.ts,
-            session=event.session,
-            annotated_image_data=annotated_image_data,
+        gcs_outfile = os.path.join(
+            self.video_upload_path, element.session, f"{start_ts}_{end_ts}.mp4"
         )
 
-    def process(
-        self,
-        elements: Tuple[str, Iterable[NestedTelemetryEvent]],
-        window=beam.DoFn.WindowParam,
-    ) -> Iterable[Tuple[str, Iterable[AnnotatedImage]]]:
-        key, values = elements
-        logger.info(f"Starting annotation of frames for session={key}")
+        local_tmp_dir = tempfile.mkdtemp(suffix=f"_{element.session}")
+        local_filepattern = os.path.join(local_tmp_dir, "*.jpg")
+        tmp_spec = TmpFileSpec(
+            session=element.session,
+            gcs_prefix=element.gcs_prefix,
+            gcs_outfile=gcs_outfile,
+            gcs_file_list=file_list,
+            local_filepattern=local_filepattern,
+            local_tmp_dir=local_tmp_dir,
+        )
+        logger.info(f"Created tmp file spec {tmp_spec}")
+        yield element.session, tmp_spec
+        # | beam.Map(lambda filename: beam.io.gcp.gcsfilesystem.GCSFileSystem)
+        # with gcs_client.open(outpath, "wb") as f:
+        #     f.write(img)
+
+        # stream = ffmpeg.input(element.filepattern).output(outpath).run()
+
+        # yield element.session, outpath
+
+
+class DownloadTmpFileSpec(beam.DoFn):
+    def __init__(self, pipeline_options):
+        self.pipeline_options = pipeline_options
+
+    def write(filename: str, data: bytes, tmp_dir: str):
+        localfs = beam.io.localfilesystem.LocalFileSystem(self.pipeline_options)
+        outfile = os.path.join(tmp_dir, filename)
+        with localfs.create(outfile) as f:
+            f.write(data)
+        yield outfile
+
+    def read(self, infile: str):
+        gcsfs = beam.io.gcp.gcsfilesystem.GCSFileSystem(self.pipeline_options)
+        filename = gcsfs.split(infile)
+        with gcsfs.open(infile) as f:
+            data = f.read()
+        yield filename, data
+
+    def process(self, element: Tuple[str, Iterable[TmpFileSpec]]):
+        key, value = elements
+
+        local_tmp_dir = value[0].local_tmp_dir
+
         yield key, (
-            values
-            | "Filter area of interest and detections above threshold"
-            | beam.ParDo(
-                FilterAreaOfInterest(
-                    self.calibration_base_path,
-                    score_threshold=self.score_threshold,
-                )
+            elements
+            | beam.FlatMap(lambda x: x.gcs_file_list)
+            | beam.Map(self.read)
+            | beam.Map(
+                lambda filename, data: self.write_to_tmp(filename, data, local_tmp_dir)
             )
-            | "Add annotated image keyed by session" >> beam.Map(self.annotate_image)
         )
 
 
-# class WriteTmpJpgs(beam.DoFn):
-#     def process(
-#         self, element: Tuple[str, Iterable[AnnotatedImage]]
-#     ) -> Iterable[Tuple[str, Iterable[str]]]:
-#         key, value
-#         yield tuple((key, (
-#             value
-#             | beam.io.fileio.WriteToFiles(
-#                 path="/tmp/annotated_frames",
-#                 destination=lambda x: x.session,
-#                 file_naming=beam.io.destination_prefix_naming(suffix=".jpg"),
-#             )
-#         )))
+def download_tmp_filespec(key: str, spec: TmpFileSpec, pipeline_options):
+    localfs = beam.io.localfilesystem.LocalFileSystem(self.pipeline_options)
+    outfile = os.path.join(tmp_dir, filename)
+    with localfs.create(outfile) as f:
+        f.write(data)
 
 
 if __name__ == "__main__":
@@ -209,8 +207,8 @@ if __name__ == "__main__":
         default="gs://print-nanny-sandbox/public/uploads/DefectAlert",
     )
     parser.add_argument(
-        "--session-video-upload-path",
-        default="gs://print-nanny-sandbox/public/uploads/PrintSessionAlert",
+        "--video-upload-path",
+        default="gs://print-nanny-sandbox/dataflow/telemetry_event/fixed_window/NestedTelemetryEvent/mp4",
     )
 
     parser.add_argument("--runner", default="DataflowRunner")
@@ -227,21 +225,16 @@ if __name__ == "__main__":
     )
 
     with beam.Pipeline(options=beam_options) as p:
-        frames_by_session = (
+        tmp_local_files_by_session = (
             p
             | f"Read from {input_topic_path}"
             >> beam.io.ReadFromPubSub(topic=input_topic_path)
             | "Decode bytes" >> beam.Map(lambda b: CreateVideoMessage.from_bytes(b))
-            | beam.Map(lambda x: os.path.join(args.parquet_input, x.session, "*"))
-            | beam.io.ReadAllFromParquet()
-            | beam.Map(lambda x: (x["session"], NestedTelemetryEvent.from_dict(x)))
+            | "Create a spec of remote/local file patterns"
+            >> beam.ParDo(CreateTmpFileSpec(args.video_upload_path, beam_options))
             | beam.GroupByKey()
-            | "Annotate images"
-            >> beam.ParDo(
-                AnnotateImage(
-                    args.calibration_base_path,
-                )
-            )
+            | "Download images" >> beam.ParDo(DownloadTmpFileSpec(beam_options))
+            | beam.Map(print)
         )
 
         # annotated_images = (

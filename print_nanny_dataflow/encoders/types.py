@@ -74,6 +74,7 @@ class CreateVideoMessage(NamedTuple):
     session: str
     metadata: Metadata
     alert_type: AlertMessageType
+    gcs_prefix: str
 
     def to_dict(self) -> Dict[str, Any]:
         return self._asdict()
@@ -86,6 +87,7 @@ class CreateVideoMessage(NamedTuple):
                     metadata=metadata,
                     session=self.session,
                     alert_type=self.alert_type.value,
+                    gcs_prefix=self.gcs_prefix,
                 )
             )
             .to_buffer()
@@ -104,6 +106,7 @@ class CreateVideoMessage(NamedTuple):
             ("session", pa.string()),
             ("metadata", Metadata.pyarrow_struct()),
             ("alert_type", pa.int32()),
+            ("filepattern", pa.string()),
         ]
 
     @classmethod
