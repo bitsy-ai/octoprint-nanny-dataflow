@@ -90,7 +90,6 @@ class CreateVideoMessage(NamedTuple):
                     alert_type=self.alert_type.value,
                     gcs_prefix_in=self.gcs_prefix_in,
                     gcs_prefix_out=self.gcs_prefix_out,
-
                 )
             )
             .to_buffer()

@@ -145,6 +145,12 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "--fixed-window-mp4-sink",
+        default="gs://print-nanny-sandbox/dataflow/telemetry_event/fixed_window/NestedTelemetryEvent/mp4",
+        help="Bounding-box annotated video (single point in time)",
+    )
+
+    parser.add_argument(
         "--sliding-window-health-raw-sink",
         default="gs://print-nanny-sandbox/dataflow/telemetry_event/sliding_window/WindowedHealthRecord/parquet",
         help="Unfiltered WindowedHealthRecord emitted from SlidingWindow",
@@ -275,11 +281,6 @@ if __name__ == "__main__":
             )
             | "Write annotated jpgs"
             >> beam.ParDo(WriteAnnotatedImage(args.fixed_window_jpg_sink))
-            # | beam.MapTuple(lambda key, row: beam.io.fileio.WriteToFiles(
-            #     path=os.path.join(args.fixed_window_jpg_sink, key),
-            #     sink=lambda dest: beam.io.filebasedsink.FileBasedSink(file_path_prefix=dest, coder=beam.coders.BytesCoder),
-            #     file_naming=beam.io.fileio.destination_prefix_naming(suffix=".jpg"),
-            # )
         )
 
         _ = fixed_window_view_by_key | "Write FixedWindow TFRecords" >> beam.ParDo(
@@ -355,7 +356,11 @@ if __name__ == "__main__":
         on_session_end = (
             session_accumulating_dataframe
             | "Should alert for session?"
-            >> beam.ParDo(ShouldPublishAlert(args.fixed_window_jpg_sink))
+            >> beam.ParDo(
+                ShouldPublishAlert(
+                    args.fixed_window_jpg_sink, args.fixed_window_mp4_sink
+                )
+            )
             | "Write to PubSub" >> beam.io.WriteToPubSub(output_topic_path)
         )
 

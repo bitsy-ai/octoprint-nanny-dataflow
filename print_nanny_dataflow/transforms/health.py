@@ -223,8 +223,9 @@ class SortWindowedHealthDataframe(beam.DoFn):
 
 
 class ShouldPublishAlert(beam.DoFn):
-    def __init__(self, base_path):
-        self.base_path = base_path
+    def __init__(self, in_base_path, out_base_path):
+        self.in_base_path = in_base_path
+        self.out_base_path = out_base_path
 
     def process(
         self,
@@ -233,14 +234,16 @@ class ShouldPublishAlert(beam.DoFn):
         pane_info=beam.DoFn.PaneInfoParam,
     ) -> Iterable[bytes]:
         key, values = element
-        gcs_prefix = os.path.join(self.base_path, key)
+        gcs_prefix_in = os.path.join(self.in_base_path, key)
+        gcs_prefix_out = os.path.join(self.out_base_path, key)
         # publish video rendering message
         if pane_info.is_last:
             msg = CreateVideoMessage(
                 session=key,
                 metadata=values[0].metadata,
                 alert_type=AlertMessageType.SESSION_DONE,
-                gcs_prefix=gcs_prefix,
+                gcs_prefix_in=gcs_prefix_in,
+                gcs_prefix_out=gcs_prefix_out,
             ).to_bytes()
             yield msg
         # @TODO analyze production distribution and write alert behavior for session panes
@@ -249,7 +252,8 @@ class ShouldPublishAlert(beam.DoFn):
                 session=key,
                 metadata=values[0].metadata,
                 alert_type=AlertMessageType.FAILURE,
-                gcs_prefix=gcs_prefix,
+                gcs_prefix_in=gcs_prefix_in,
+                gcs_prefix_out=gcs_prefix_out,
             ).to_bytes()
             yield msg
 
