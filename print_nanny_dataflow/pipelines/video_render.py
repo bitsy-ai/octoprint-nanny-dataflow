@@ -75,7 +75,7 @@ class RenderVideo(beam.DoFn):
                 msg.gcs_prefix_out,
             ]
         )
-        yield msg.key, val
+        yield msg.session, val
 
 
 if __name__ == "__main__":

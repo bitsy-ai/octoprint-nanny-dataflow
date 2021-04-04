@@ -29,7 +29,6 @@ alerts-local-dev:
 	--loglevel INFO \
 	--api-url="http://localhost:8000/api" \
 	--api-token=$$PRINT_NANNY_API_TOKEN \
-	--direct_num_workers=12 \
 	--runtime_type_check
 
 
