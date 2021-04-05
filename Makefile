@@ -4,6 +4,10 @@
 PYTHON=.venv/bin/python
 PIP=.venv/bin/pip
 
+PROJECT ?= "print-nanny-sandbox"
+PRINT_NANNY_API_URL ?= "http://localhost:8000/api"
+IMAGE ?= "gcr.io/${PROJECT}/print-nanny-dataflow:2d1b0deebb019d21e429b374272ae73c52b7d491"
+PIPELINE ?= "print_nanny_dataflow.pipelines.sliding_window_health"
 
 clean-build: ## remove build artifacts
 	rm -fr build/
@@ -24,48 +28,35 @@ clean-pyc: ## remove Python file artifacts
 clean: clean-dist clean-pyc clean-build
 
 docker-image:
-	gcloud builds submit --tag gcr.io/print-nanny-sandbox/print-nanny-dataflow:$(shell git rev-parse HEAD)
+	gcloud builds submit --tag gcr.io/${PROJECT}/print-nanny-dataflow:$(shell git rev-parse HEAD)
 
-alerts-local-dev:
-	$(PYTHON) print_nanny_dataflow/pipelines/video_render.py \
+direct:
+	$(PYTHON)-m $(PIPELINE) \
 	--runner DirectRunner \
 	--loglevel INFO \
-	--api-url="http://localhost:8000/api" \
-	--api-token=$$PRINT_NANNY_API_TOKEN \
-	--runtime_type_check
-
-health-local-dev:
-	$(PYTHON) print_nanny_dataflow/pipelines/sliding_window_health.py \
-	--runner DirectRunner \
-	--loglevel INFO \
-	--api-url="http://localhost:8000/api" \
+	--api-url=$(PRINT_NANNY_API_URL) \
 	--api-token=$$PRINT_NANNY_API_TOKEN \
 	--direct_num_workers=12 \
 	--runtime_type_check
 
-health-local-portable:
-	$(PYTHON) -m print_nanny_dataflow.pipelines.sliding_window_health \
+portable:
+	$(PYTHON) -m $(PIPELINE) \
 	--runner PortableRunner \
 	--loglevel INFO \
-	--api-url="http://localhost:8000/api" \
+	--api-url=$(PRINT_NANNY_API_URL) \
 	--api-token=$$PRINT_NANNY_API_TOKEN \
 	--job_endpoint=embed \
 	--environment_type=DOCKER \
-	--environment_config=$(ARGS) \
+	--environment_config=$(IMAGE) \
 	--sdk_location=container \
 	​--setup_file=setup.py \
 	--requirements_file=requirements.txt
 
-dataflow-prod:
-	$(PYTHON) print_nanny_dataflow/pipelines/sliding_window_health.py \
+dataflow:
+	$(PYTHON) -m $(PIPELINE) \
 	--runner DataflowRunner \
-	--topic projects/print-nanny/topics/bounding-boxes-prod \
-	--api-url="http://localhost:8000/api" \
+	--api-url=$(PRINT_NANNY_API_URL) \
 	--api-token=$$PRINT_NANNY_API_TOKEN \
-	--window 300 \
-	--sink gs://print-nanny-prod/dataflow/bounding-box-events/windowed \
-	--loglevel INFO 
-
 
 lint:
 	$(PYTHON) -m black setup.py print_nanny_dataflow conftest.py tests
