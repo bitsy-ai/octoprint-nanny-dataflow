@@ -39,5 +39,6 @@ setup(
     url="",
     install_requires=REQUIRES,
     packages=find_packages(),
+    scripts=["print_nanny_dataflow/scripts/render_video.sh"],
     include_package_data=True,
 )

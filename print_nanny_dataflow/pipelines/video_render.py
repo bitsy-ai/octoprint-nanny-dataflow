@@ -15,7 +15,7 @@ from print_nanny_dataflow.encoders.types import (
     CreateVideoMessage,
 )
 from apache_beam.transforms.trigger import AfterCount, AfterWatermark, AfterAny
-
+import print_nanny_dataflow
 
 logger = logging.getLogger(__name__)
 
@@ -62,8 +62,8 @@ class RenderVideoTriggerAlert(beam.DoFn):
 
 class RenderVideo(beam.DoFn):
     def process(self, msg: CreateVideoMessage):
-        path = os.path.dirname(__file__)
-        script = os.path.join(path, "render_video.sh")
+        path = os.path.dirname(print_nanny_dataflow.__file__)
+        script = os.path.join(path, "scripts", "render_video.sh")
         val = subprocess.check_call(
             [
                 script,

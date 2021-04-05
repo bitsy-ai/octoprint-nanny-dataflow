@@ -52,10 +52,9 @@ health-local-portable:
 	--job_endpoint=embed \
 	--environment_type=DOCKER \
 	--environment_config=$(ARGS) \
-	​--setup_file setup.py \
-	--runtime_type_check
-
-
+	--sdk_location=container \
+	​--setup_file=setup.py \
+	--requirements_file=requirements.txt
 
 dataflow-prod:
 	$(PYTHON) print_nanny_dataflow/pipelines/sliding_window_health.py \
