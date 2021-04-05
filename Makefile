@@ -34,7 +34,6 @@ alerts-local-dev:
 	--api-token=$$PRINT_NANNY_API_TOKEN \
 	--runtime_type_check
 
-
 health-local-dev:
 	$(PYTHON) print_nanny_dataflow/pipelines/sliding_window_health.py \
 	--runner DirectRunner \
@@ -45,20 +44,21 @@ health-local-dev:
 	--runtime_type_check
 
 health-local-portable:
-	$(PYTHON) print_nanny_dataflow/pipelines/sliding_window_health.py \
+	$(PYTHON) -m print_nanny_dataflow.pipelines.sliding_window_health \
 	--runner PortableRunner \
 	--loglevel INFO \
 	--api-url="http://localhost:8000/api" \
 	--api-token=$$PRINT_NANNY_API_TOKEN \
 	--job_endpoint=embed \
 	--environment_type=DOCKER \
-	--environment_config=$(ARGS)
+	--environment_config=$(ARGS) \
+	​--setup_file setup.py \
 	--runtime_type_check
 
 
 
 dataflow-prod:
-	$(PYTHON)  print_nanny_dataflow/pipelines/sliding_window_health.py \
+	$(PYTHON) print_nanny_dataflow/pipelines/sliding_window_health.py \
 	--runner DataflowRunner \
 	--topic projects/print-nanny/topics/bounding-boxes-prod \
 	--api-url="http://localhost:8000/api" \

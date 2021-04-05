@@ -10,4 +10,4 @@ COPY requirements.txt /app/requirements.txt
 RUN pip install -r /app/requirements.txt
 COPY setup.py /app/setup.py
 COPY print_nanny_dataflow /app/print_nanny_dataflow
-RUN pip install /app
+# RUN pip install /app

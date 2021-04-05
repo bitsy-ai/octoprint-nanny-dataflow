@@ -38,7 +38,6 @@ setup(
     author_email="leigh@bitsy.ai",
     url="",
     install_requires=REQUIRES,
-    packages=["print_nanny_dataflow"],
-    package_dir={"print_nanny_dataflow": "print_nanny_dataflow/"},
+    packages=find_packages(),
     include_package_data=True,
 )
