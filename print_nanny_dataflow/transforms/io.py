@@ -1,5 +1,9 @@
 import os
 import logging
+import pandas as pd
+import numpy as np
+from collections import Sequence
+from collections import OrderedDict
 from typing import Tuple, Any, Iterable, NamedTuple, List
 import apache_beam as beam
 
@@ -29,6 +33,7 @@ class WriteWindowedTFRecord(beam.DoFn):
         coder = ExampleProtoEncoder(self.schema)
         output = os.path.join(self.base_path, key, f"{window_start}_{window_end}")
         logger.info(f"Writing {output} with coder {coder}")
+
         yield (
             elements
             | beam.io.tfrecordio.WriteToTFRecord(
@@ -39,6 +44,15 @@ class WriteWindowedTFRecord(beam.DoFn):
                 coder=coder,
             )
         )
+
+
+# TODO beam parquetio pyarrow serializer only handles basic Python types, hence list() on itertuples zip generator below
+# pyarrow.lib.ArrowTypeError: Could not convert <zip object at 0x7f578011ef80> with type zip: was not a sequence or recognized null for conversion to list type [while running 'WriteToParquet/Write/WriteImpl/WriteBundles']
+SERIALIZE_FNS = {
+    pd.DataFrame: lambda x: list(tuple(n) for n in x.itertuples(name=None)),
+    pd.Series: lambda x: list(x),
+    np.polynomial.polynomial.Polynomial: lambda x: list(x),
+}
 
 
 class WriteWindowedParquet(beam.DoFn):

@@ -2,6 +2,7 @@ from typing import Tuple, Iterable, Optional, Any, NamedTuple
 import logging
 
 import os
+import io
 import numpy as np
 import pandas as pd
 import tensorflow as tf
@@ -11,30 +12,23 @@ from apache_beam.dataframe.transforms import DataframeTransform
 from print_nanny_dataflow.encoders.types import (
     NestedTelemetryEvent,
     WindowedHealthRecord,
-    WindowedHealthDataFrames,
+    NestedWindowedHealthTrend,
     DeviceCalibration,
-    PendingAlert,
+    CreateVideoMessage,
     Metadata,
+    NestedWindowedHealthTrend,
+    CATEGORY_INDEX,
+    AlertMessageType,
 )
 
 logger = logging.getLogger(__name__)
-
-# @todo load dynamically from active experiment
-CATEGORY_INDEX = {
-    0: {"name": "background", "id": 0, "health_weight": 0},
-    1: {"name": "nozzle", "id": 1, "health_weight": 0},
-    2: {"name": "adhesion", "id": 2, "health_weight": -0.5},
-    3: {"name": "spaghetti", "id": 3, "health_weight": -0.5},
-    4: {"name": "print", "id": 4, "health_weight": 1},
-    5: {"name": "raftt", "id": 5, "health_weight": 1},
-}
 
 
 def health_score_trend_polynomial_v1(
     df: pd.DataFrame, degree=1
 ) -> Tuple[pd.DataFrame, np.polynomial.polynomial.Polynomial]:
     """
-    Takes a pandas DataFrame of WindowedHealthRecords and returns a polynormial fit to degree
+    Takes a pandas DataFrame of WindowedHealthRecords and returns a polynommial fit to degree
     """
     xy = (
         df[df["health_weight"] > 0]
@@ -44,9 +38,8 @@ def health_score_trend_polynomial_v1(
             df[df["health_weight"] < 0].groupby(["ts"])["health_score"].min(),
             fill_value=0,
         )
+        .cumsum()
     )
-
-    logger.info(f"Calculating polyfit with degree={degree} on df: \n {xy}")
     trend = np.polynomial.polynomial.Polynomial.fit(xy.index, xy, degree)
     return xy, trend
 
@@ -96,8 +89,8 @@ class ExplodeWindowedHealthRecord(beam.DoFn):
         window_end = int(window.end)
 
         metadata = Metadata(
-            session=element.session,
             client_version=element.client_version,
+            session=element.session,
             user_id=element.user_id,
             device_id=element.device_id,
             device_cloudiot_id=element.device_cloudiot_id,
@@ -153,7 +146,7 @@ class FilterAreaOfInterest(beam.DoFn):
 
     def process(
         self,
-        keyed_elements=beam.DoFn.ElementParam,
+        keyed_elements=Tuple[str, Iterable[NestedTelemetryEvent]],
         key=beam.DoFn.KeyParam,
     ) -> Iterable[NestedTelemetryEvent]:
         session, elements = keyed_elements
@@ -182,7 +175,7 @@ class SortWindowedHealthDataframe(beam.DoFn):
             Any, Iterable[WindowedHealthRecord]
         ] = beam.DoFn.ElementParam,
         window=beam.DoFn.WindowParam,
-    ) -> Iterable[Tuple[str, WindowedHealthDataFrames]]:
+    ) -> Iterable[Tuple[str, NestedWindowedHealthTrend]]:
         key, windowed_health_records = keyed_elements
 
         window_start = int(window.start)
@@ -194,19 +187,75 @@ class SortWindowedHealthDataframe(beam.DoFn):
         )
         if len(df.index) < self.warmup:
             return
-        cumsum, trend = health_score_trend_polynomial_v1(df, degree=self.polyfit_degree)
+        try:
+            cumsum, trend = health_score_trend_polynomial_v1(
+                df, degree=self.polyfit_degree
+            )
+        except ValueError as e:
+            logger.error(
+                {
+                    "error": e,
+                    "data": df,
+                    "msg": "Fatal error in SortWindowedHealthDataframe transform",
+                }
+            )
+            return
         metadata = df.iloc[0]["metadata"]
-        record_df = df.drop(columns=["metadata"], axis=1)
+        logger.info(
+            f"SortWindowedHealthDataframe emitting NestedWindowedHealthTrend window_start={window_start} window_end={window_end}"
+        )
         yield (
             key,
-            WindowedHealthDataFrames(
+            NestedWindowedHealthTrend(
                 session=key,
-                trend=trend,
-                record_df=record_df,
-                cumsum=cumsum,
+                poly_coef=np.array(trend.coef),
+                poly_domain=np.array(trend.domain),
+                poly_roots=np.array(trend.roots()),
+                poly_degree=trend.degree(),
+                cumsum=cumsum.to_numpy(),
                 metadata=metadata,
+                health_score=df["health_score"].to_numpy(),
+                health_weight=df["health_weight"].to_numpy(),
+                detection_class=df["detection_class"].to_numpy(),
+                detection_score=df["detection_score"].to_numpy(),
             ),
         )
+
+
+class ShouldPublishAlert(beam.DoFn):
+    def __init__(self, in_base_path, out_base_path):
+        self.in_base_path = in_base_path
+        self.out_base_path = out_base_path
+
+    def process(
+        self,
+        element=Tuple[Any, Iterable[NestedWindowedHealthTrend]],
+        window=beam.DoFn.WindowParam,
+        pane_info=beam.DoFn.PaneInfoParam,
+    ) -> Iterable[bytes]:
+        key, values = element
+        gcs_prefix_in = os.path.join(self.in_base_path, key)
+        gcs_prefix_out = os.path.join(self.out_base_path, key)
+        # publish video rendering message
+        if pane_info.is_last:
+            msg = CreateVideoMessage(
+                session=key,
+                metadata=values[0].metadata,
+                alert_type=AlertMessageType.SESSION_DONE,
+                gcs_prefix_in=gcs_prefix_in,
+                gcs_prefix_out=gcs_prefix_out,
+            ).to_bytes()
+            yield msg
+        # @TODO analyze production distribution and write alert behavior for session panes
+        else:
+            msg = CreateVideoMessage(
+                session=key,
+                metadata=values[0].metadata,
+                alert_type=AlertMessageType.FAILURE,
+                gcs_prefix_in=gcs_prefix_in,
+                gcs_prefix_out=gcs_prefix_out,
+            ).to_bytes()
+            yield msg
 
 
 class MonitorHealthStateful(beam.DoFn):
@@ -219,36 +268,54 @@ class MonitorHealthStateful(beam.DoFn):
 
     def process(
         self,
-        element: Tuple[Any, WindowedHealthDataFrames],
+        element: Tuple[Any, Iterable[NestedWindowedHealthTrend]],
         pane_info=beam.DoFn.PaneInfoParam,
+        window=beam.DoFn.WindowParam,
         failures=beam.DoFn.StateParam(FAILURES),
-    ) -> Iterable[Tuple[str, WindowedHealthDataFrames]]:
-        key, value = element
+    ) -> Iterable[Tuple[str, Iterable[NestedWindowedHealthTrend]]]:
 
-        slope, intercept = value.trend
-        if slope < 0:
-            failures.add(1)
-
+        key, values = element
         current_failures = failures.read()
-        value = value.with_failure_count(current_failures)
-        # @TODO analyze production distribution and write alert behavior
+        failures.add(1)
 
-        # @TODO write pyarrow schema instead of inferring it here
-        # table = pa.Table.from_pydict(element.to_dict())
+        window_start = int(window.start)
+        window_end = int(window.end)
+        logger.info(
+            f"MonitorHealthStateful received n={len(element)} elements window_start={window_start} window_end={window_end}"
+        )
+        logger.info(
+            f"Pane fired with pane_info={pane_info} window={window} failures={current_failures}"
+        )
+        # import pdb; pdb.set_trace()
+        yield key, values
+        # key, value = element
 
-        yield key, value
+        # slope, intercept = value.trend.coef
+        # if slope < 0:
+        #     failures.add(1)
 
-        # if this is the last window pane in session, begin video rendering
-        if current_failures > self.failure_threshold:
-            logger.warning(
-                f"FAILURE DETECTED session={value.session} current_failurest={current_failures}"
-            )
-        if pane_info.is_last:
-            logger.info(f"Last pane fired in pane_info={pane_info}")
+        # current_failures = failures.read()
+        # value = value.with_failure_count(current_failures)
+        # # @TODO analyze production distribution and write alert behavior
 
-            # Exception: PubSub I/O is only available in streaming mode (use the --streaming flag). [while running 'Stateful health score threshold monitor']
-            # pending_alert = PendingAlert(
-            #     metadata=value.metadata,
-            #     session=key,
-            # )
-            # [pending_alert] | beam.io.WriteToPubSub(self.pubsub_topic)
+        # # @TODO write pyarrow schema instead of inferring it here
+        # # table = pa.Table.from_pydict(element.to_dict())
+
+        # yield key, value
+
+        # logger.info(f"Pane fired with pane_info={pane_info} window={window} failures={current_failures}")
+
+        # if current_failures > self.failure_threshold:
+        #     logger.warning(
+        #         f"FAILURE DETECTED session={value.session} current_failurest={current_failures}"
+        #     )
+        # # if this is the last window pane in session, begin video rendering
+        # if pane_info.is_last:
+        #     logger.info(f"Last pane fired in pane_info={pane_info} window={window} failures={current_failures}")
+
+        #     # Exception: PubSub I/O is only available in streaming mode (use the --streaming flag). [while running 'Stateful health score threshold monitor']
+        # pending_alert = CreateVideoMessage(
+        #     metadata=value.metadata,
+        #     session=key,
+        # )
+        # [pending_alert] | beam.io.WriteToPubSub(self.pubsub_topic)

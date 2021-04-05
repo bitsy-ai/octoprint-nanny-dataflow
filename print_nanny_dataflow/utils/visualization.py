@@ -483,6 +483,7 @@ def visualize_boxes_and_labels_on_image_array(
     box_to_keypoints_map = collections.defaultdict(list)
     box_to_track_ids_map = {}
     box_to_detection_box_ignored_map = {}
+
     if not max_boxes_to_draw:
         max_boxes_to_draw = boxes.shape[0]
     for i in range(min(max_boxes_to_draw, boxes.shape[0])):

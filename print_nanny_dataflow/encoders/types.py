@@ -1,6 +1,6 @@
 from __future__ import annotations
 import json
-
+from enum import Enum
 from typing import Tuple, Dict, Any, NamedTuple, TypeVar, Generic
 import pandas as pd
 import numpy as np
@@ -16,26 +16,20 @@ from print_nanny_client.telemetry_event import TelemetryEvent
 
 from dataclasses import dataclass, asdict
 
-DETECTION_LABELS = {
-    1: "nozzle",
-    2: "adhesion",
-    3: "spaghetti",
-    4: "print",
-    5: "raft",
+CATEGORY_INDEX = {
+    0: {"name": "background", "id": 0, "health_weight": 0},
+    1: {"name": "nozzle", "id": 1, "health_weight": 0},
+    2: {"name": "adhesion", "id": 2, "health_weight": -0.5},
+    3: {"name": "spaghetti", "id": 3, "health_weight": -0.5},
+    4: {"name": "print", "id": 4, "health_weight": 1},
+    5: {"name": "raftt", "id": 5, "health_weight": 1},
 }
 
-HEALTH_MULTIPLER = {1: 0, 2: -0.5, 3: -0.5, 4: 1, 5: 0}
 
-NEUTRAL_LABELS = {1: "nozzle", 5: "raft"}
-
-NEGATIVE_LABELS = {
-    2: "adhesion",
-    3: "spaghetti",
-}
-
-POSITIVE_LABELS = {
-    4: "print",
-}
+class WindowType(Enum):
+    Fixed = 1
+    Sliding = 2
+    Sessions = 3
 
 
 class Metadata(NamedTuple):
@@ -44,8 +38,11 @@ class Metadata(NamedTuple):
     user_id: int
     device_id: int
     device_cloudiot_id: int
-    window_start: int
-    window_end: int
+    window_start: int = None
+    window_end: int = None
+
+    def to_dict(self):
+        return self._asdict()
 
     @staticmethod
     def pyarrow_fields():
@@ -64,34 +61,63 @@ class Metadata(NamedTuple):
         return pa.struct(cls.pyarrow_fields())
 
     @classmethod
-    def pyarrow_schema():
+    def pyarrow_schema(cls):
         return pa.schema(cls.pyarrow_fields())
 
 
-class PendingAlert(NamedTuple):
+class AlertMessageType(Enum):
+    FAILURE = 1
+    SESSION_DONE = 2
+
+
+class CreateVideoMessage(NamedTuple):
     session: str
     metadata: Metadata
+    alert_type: AlertMessageType
+    gcs_prefix_in: str
+    gcs_prefix_out: str
 
-    def to_json(self):
-        return json.dumps(self._asdict())
+    def to_dict(self) -> Dict[str, Any]:
+        return self._asdict()
 
     def to_bytes(self):
-        return self.to_json().encode("utf-8")
+        metadata = self.metadata.to_dict()
+        return (
+            pa.serialize(
+                dict(
+                    metadata=metadata,
+                    session=self.session,
+                    alert_type=self.alert_type.value,
+                    gcs_prefix_in=self.gcs_prefix_in,
+                    gcs_prefix_out=self.gcs_prefix_out,
+                )
+            )
+            .to_buffer()
+            .to_pybytes()
+        )
+
+    @classmethod
+    def from_bytes(cls, pyarrow_bytes):
+        data = pa.deserialize(pyarrow_bytes)
+        data["metadata"] = Metadata(**data["metadata"])
+        return cls(**data)
 
     @staticmethod
     def pyarrow_fields():
         return [
             ("session", pa.string()),
             ("metadata", Metadata.pyarrow_struct()),
+            ("alert_type", pa.int32()),
+            ("filepattern", pa.string()),
         ]
 
     @classmethod
     def pyarrow_struct(cls):
-        return pa.struct(cls.pyarrow_fields)
+        return pa.struct(cls.pyarrow_fields())
 
     @classmethod
-    def pyarrow_schema():
-        return pa.schema(cls.pyarrow_fields)
+    def pyarrow_schema(cls):
+        return pa.schema(cls.pyarrow_fields())
 
 
 class HealthTrend(NamedTuple):
@@ -101,83 +127,120 @@ class HealthTrend(NamedTuple):
     roots: npt.NDArray[npt.Float32]
     degree: int
 
+    def to_dict(self) -> Dict[str, Any]:
+        return self._asdict()
+
     @staticmethod
-    def pyarrow_schema(self):
-        return pa.schema(
-            [
-                ("coef", pa.list_(pa.float32())),
-                ("domain", pa.list_(pa.float32())),
-                ("window", pa.list_(pa.float32())),
-                ("roots", pa.list_(pa.float32())),
-                ("degree", pa.int32),
-            ]
-        )
+    def pyarrow_fields():
+        return [
+            ("coef", pa.list_(pa.float32())),
+            ("domain", pa.list_(pa.float32())),
+            ("window", pa.list_(pa.float32())),
+            ("roots", pa.list_(pa.float32())),
+            ("degree", pa.int32()),
+        ]
+
+    @classmethod
+    def pyarrow_struct(cls):
+        return pa.struct(cls.pyarrow_fields())
+
+    @classmethod
+    def pyarrow_schema(cls):
+        return pa.schema(cls.pyarrow_fields())
 
 
-class WindowedHealthDataFrames(NamedTuple):
+class WindowedHealthDataFrameRow(NamedTuple):
+    ts: int
     session: str
-    record_df: pd.DataFrame
-    cumsum: pd.DataFrame
-    trend: np.polynomial.polynomial.Polynomial
+    health_score: npt.Float32
+    health_weight: npt.Float32
+    detection_class: npt.Int32
+    detection_score: npt.Float32
+
+    def to_dict():
+        return self._asdict()
+
+    @staticmethod
+    def pyarrow_fields():
+        return [
+            ("ts", pa.int64()),
+            ("session", pa.string()),
+            ("health_score", pa.float32()),
+            ("health_weight", pa.float32()),
+            ("detection_class", pa.int32()),
+            ("detection_score", pa.float32()),
+        ]
+
+    @classmethod
+    def pyarrow_struct(cls):
+        return pa.struct(cls.pyarrow_fields())
+
+    @classmethod
+    def pyarrow_schema(cls):
+        return pa.schema(cls.pyarrow_fields())
+
+
+class NestedWindowedHealthTrend(NamedTuple):
+    session: str
     metadata: Metadata
-    failure_count: int = 0
+    health_score: npt.NDArray[npt.Float32]
+    health_weight: npt.NDArray[npt.Float32]
+    detection_class: npt.NDArray[npt.Int32]
+    detection_score: npt.NDArray[npt.Float32]
+    cumsum: npt.NDArray[npt.Float32]
+    poly_coef: npt.NDArray[npt.Float32]
+    poly_domain: npt.NDArray[npt.Float32]
+    poly_roots: npt.NDArray[npt.Float32]
+    poly_degree: int
 
     def to_dict(self) -> Dict[str, Any]:
         return self._asdict()
 
-    def with_failure_count(self, failure_count: int):
-        _kwargs = self.to_dict()
-        _kwargs.update(dict(failure_count=failure_count))
-        return self.__class__(**_kwargs)
+    def to_bytes(self):
+        return pa.serialize(self.to_dict()).to_buffer().to_pybytes()
 
-    # @TODO currently inferred using pandas
-    @staticmethod
-    def pyarrow_record_df_struct():
-        return pa.struct(
-            [
-                [
-                    ("ts", pa.int64()),
-                    ("session", pa.string()),
-                    ("health_score", pa.float32()),
-                    ("health_weight", pa.float32()),
-                    ("detection_class", pa.int32()),
-                    ("detection_score", pa.float32()),
-                ]
-            ]
-        )
+    @classmethod
+    def from_bytes(cls, pyarrow_bytes):
+        return cls(**pa.deserialize(pyarrow_bytes))
+
+    def to_parquetio_serializable(self):
+        """
+        apache_beam.io.parquetio expects a dicts of native python types as input
+        TODO Investigate next steps...
+        Write custom parquetio transform to handle my Flatbuffer schemas?
+        Extend apache_beam.coders.coders Base?
+
+        Beam monkey-patches dill
+        https://github.com/apache/beam/blob/master/sdks/python/apache_beam/internal/pickler.py
+        Apache arrow falls back to standard lib pickle
+        https://arrow.apache.org/docs/python/ipc.html#serializing-custom-data-types
+        """
+
+        pass
 
     @staticmethod
     def pyarrow_fields():
         return [
             ("session", pa.string()),
             ("metadata", Metadata.pyarrow_struct()),
-            (
-                "record_df",
-                pa.struct(
-                    [
-                        [
-                            ("ts", pa.int64()),
-                            ("session", pa.string()),
-                            ("health_score", pa.float32()),
-                            ("health_weight", pa.float32()),
-                            ("detection_class", pa.int32()),
-                            ("detection_score", pa.float32()),
-                        ]
-                    ]
-                ),
-            ),
+            ("health_score", pa.list_(pa.float32())),
+            ("health_weight", pa.list_(pa.float32())),
+            ("detection_class", pa.list_(pa.float32())),
+            ("detection_score", pa.list_(pa.float32())),
             ("cumsum", pa.list_(pa.float32())),
-            ("failure_count", pa.int64()),
-            ("trend", HealthTrend.pyarrow_schema()),
+            ("poly_coef", pa.list_(pa.float32())),
+            ("poly_domain", pa.list_(pa.float32())),
+            ("poly_roots", pa.list_(pa.float32())),
+            ("poly_degree", pa.int32()),
         ]
 
-    # @classmethod
-    # def pyarrow_struct(cls):
-    #     return pa.struct(cls.pyarrow_fields)
+    @classmethod
+    def pyarrow_struct(cls):
+        return pa.struct(cls.pyarrow_fields())
 
     @classmethod
     def pyarrow_schema(cls):
-        return pa.schema(cls.pyarrow_fields)
+        return pa.schema(cls.pyarrow_fields())
 
 
 class WindowedHealthRecord(NamedTuple):
@@ -197,18 +260,24 @@ class WindowedHealthRecord(NamedTuple):
         return pd.DataFrame(self.to_dict(), index=["ts", "detection_class"])
 
     @staticmethod
-    def pyarrow_schema():
-        return pa.schema(
-            [
-                ("ts", pa.int64()),
-                ("session", pa.string()),
-                ("metadata", Metadata.pyarrow_struct()),
-                ("health_score", pa.float32()),
-                ("health_weight", pa.float32()),
-                ("detection_class", pa.int32()),
-                ("detection_score", pa.float32()),
-            ]
-        )
+    def pyarrow_fields():
+        return [
+            ("ts", pa.int64()),
+            ("session", pa.string()),
+            ("metadata", Metadata.pyarrow_struct()),
+            ("health_score", pa.float32()),
+            ("health_weight", pa.float32()),
+            ("detection_class", pa.int32()),
+            ("detection_score", pa.float32()),
+        ]
+
+    @classmethod
+    def pyarrow_struct(cls):
+        return pa.struct(cls.pyarrow_fields())
+
+    @classmethod
+    def pyarrow_schema(cls):
+        return pa.schema(cls.pyarrow_fields())
 
 
 class DeviceCalibration(NamedTuple):
@@ -260,6 +329,13 @@ class DeviceCalibration(NamedTuple):
         return NestedTelemetryEvent.__class__(**_kwargs)
 
 
+class AnnotatedImage(NamedTuple):
+    ts: int
+    session: str
+    metadata: Metadata
+    annotated_image_data: bytes
+
+
 class NestedTelemetryEvent(NamedTuple):
     """
     1 NestedTelemetryEvent : 1 Monitoring Frame
@@ -269,11 +345,9 @@ class NestedTelemetryEvent(NamedTuple):
     client_version: str
     session: str
 
-    # Metadata
     user_id: int
     device_id: int
     device_cloudiot_id: int
-
     # BoundingBoxes
     detection_scores: npt.NDArray[npt.Float32]
     detection_classes: npt.NDArray[npt.Int32]
@@ -367,17 +441,14 @@ class NestedTelemetryEvent(NamedTuple):
             ]
 
         image_data = obj.eventData.image.data.tobytes()
+        session = obj.metadata.session.decode("utf-8")
         return cls(
             ts=obj.metadata.ts,
-            session=obj.metadata.session.decode("utf-8"),
-            client_version=obj.metadata.clientVersion.decode("utf-8"),
+            session=session,
             image_height=obj.eventData.image.height,
             image_width=obj.eventData.image.width,
             image_tensor=tf.expand_dims(tf.io.decode_jpeg(image_data), axis=0),
             image_data=image_data,
-            user_id=obj.metadata.userId,
-            device_id=obj.metadata.deviceId,
-            device_cloudiot_id=obj.metadata.deviceCloudiotId,
             detection_scores=scores,
             detection_classes=classes,
             num_detections=num_detections,
@@ -385,10 +456,18 @@ class NestedTelemetryEvent(NamedTuple):
             boxes_xmin=boxes_xmin,
             boxes_ymax=boxes_ymax,
             boxes_xmax=boxes_xmax,
+            user_id=obj.metadata.userId,
+            device_id=obj.metadata.deviceId,
+            device_cloudiot_id=obj.metadata.deviceCloudiotId,
+            client_version=obj.metadata.clientVersion.decode("utf-8"),
         )
 
     def to_dict(self) -> Dict[str, Any]:
         return self._asdict()
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(**data)
 
     def to_dataframe(self) -> pd.DataFrame:
         return pd.DataFrame(self.to_dict())

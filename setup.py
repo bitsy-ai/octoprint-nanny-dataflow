@@ -23,6 +23,11 @@ REQUIRES = [
     "pillow",
     "print_nanny_client>=0.5.0-dev60",
     "gcsfs",
+    "pyarrow",
+    "pandas",
+    "tensorflow",
+    "tensorflow-transform",
+    "backoff",
 ]
 
 setup(
@@ -33,7 +38,7 @@ setup(
     author_email="leigh@bitsy.ai",
     url="",
     install_requires=REQUIRES,
-    packages=["print_nanny_dataflow"],
-    package_dir={"print_nanny_dataflow": "print_nanny_dataflow/"},
+    packages=find_packages(),
+    scripts=["print_nanny_dataflow/scripts/render_video.sh"],
     include_package_data=True,
 )
