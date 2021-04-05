@@ -4,10 +4,10 @@ RUN apt-get update -qq && apt-get -y install \
     ffmpeg
 
 RUN pip install --upgrade pip wheel setuptools
+RUN mkdir /app
+COPY requirements.txt /app/requirements.txt
 
-ADD requirements.txt requirements.txt
-
-RUN pip install -r requirements.txt
-ADD setup.py setup.py
-RUN pip install -e .
-ADD print_nanny_dataflow .
+RUN pip install -r /app/requirements.txt
+COPY setup.py /app/setup.py
+COPY print_nanny_dataflow /app/print_nanny_dataflow
+RUN pip install /app
