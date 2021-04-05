@@ -25,6 +25,9 @@ REQUIRES = [
     "gcsfs",
     "pyarrow",
     "pandas",
+    "tensorflow",
+    "tensorflow-transform",
+    "backoff",
 ]
 
 setup(

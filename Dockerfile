@@ -8,4 +8,6 @@ RUN pip install --upgrade pip wheel setuptools
 ADD requirements.txt requirements.txt
 
 RUN pip install -r requirements.txt
+ADD setup.py setup.py
+RUN pip install -e .
 ADD print_nanny_dataflow .

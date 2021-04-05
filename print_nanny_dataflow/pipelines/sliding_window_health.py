@@ -23,8 +23,6 @@ from apache_beam import window
 from apache_beam.options.pipeline_options import GoogleCloudOptions
 from apache_beam.options.pipeline_options import PipelineOptions
 import PIL
-from tensorflow_transform.beam import impl as beam_impl
-from tensorflow_serving.apis import predict_pb2
 from apache_beam.dataframe.convert import to_dataframe, to_pcollection
 from apache_beam.dataframe.transforms import DataframeTransform
 from apache_beam.transforms.trigger import (
