@@ -14,7 +14,7 @@ from print_nanny_dataflow.encoders.types import (
     WindowedHealthRecord,
     NestedWindowedHealthTrend,
     DeviceCalibration,
-    CreateVideoMessage,
+    RenderVideoMessage,
     Metadata,
     NestedWindowedHealthTrend,
     CATEGORY_INDEX,
@@ -222,7 +222,7 @@ class SortWindowedHealthDataframe(beam.DoFn):
         )
 
 
-class ShouldPublishAlert(beam.DoFn):
+class CreateVideoRenderMessage(beam.DoFn):
     def __init__(self, in_base_path, out_base_path):
         self.in_base_path = in_base_path
         self.out_base_path = out_base_path
@@ -238,7 +238,7 @@ class ShouldPublishAlert(beam.DoFn):
         gcs_prefix_out = os.path.join(self.out_base_path, key, "annotated_video.mp4")
         # publish video rendering message
         if pane_info.is_last:
-            msg = CreateVideoMessage(
+            msg = RenderVideoMessage(
                 session=key,
                 metadata=values[0].metadata,
                 alert_type=AlertMessageType.SESSION_DONE,
@@ -248,7 +248,7 @@ class ShouldPublishAlert(beam.DoFn):
             yield msg
         # @TODO analyze production distribution and write alert behavior for session panes
         else:
-            msg = CreateVideoMessage(
+            msg = RenderVideoMessage(
                 session=key,
                 metadata=values[0].metadata,
                 alert_type=AlertMessageType.FAILURE,
@@ -314,7 +314,7 @@ class MonitorHealthStateful(beam.DoFn):
         #     logger.info(f"Last pane fired in pane_info={pane_info} window={window} failures={current_failures}")
 
         #     # Exception: PubSub I/O is only available in streaming mode (use the --streaming flag). [while running 'Stateful health score threshold monitor']
-        # pending_alert = CreateVideoMessage(
+        # pending_alert = RenderVideoMessage(
         #     metadata=value.metadata,
         #     session=key,
         # )

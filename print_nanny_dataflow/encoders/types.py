@@ -70,7 +70,7 @@ class AlertMessageType(Enum):
     SESSION_DONE = 2
 
 
-class CreateVideoMessage(NamedTuple):
+class RenderVideoMessage(NamedTuple):
     session: str
     metadata: Metadata
     alert_type: AlertMessageType

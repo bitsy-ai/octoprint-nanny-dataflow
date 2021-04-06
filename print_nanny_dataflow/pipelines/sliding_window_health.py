@@ -46,7 +46,7 @@ from print_nanny_dataflow.transforms.health import (
     FilterAreaOfInterest,
     SortWindowedHealthDataframe,
     MonitorHealthStateful,
-    ShouldPublishAlert,
+    CreateVideoRenderMessage,
 )
 
 from print_nanny_dataflow.transforms.video import WriteAnnotatedImage
@@ -356,20 +356,20 @@ if __name__ == "__main__":
             session_accumulating_dataframe
             | "Should alert for session?"
             >> beam.ParDo(
-                ShouldPublishAlert(
+                CreateVideoRenderMessage(
                     args.fixed_window_jpg_sink, args.fixed_window_mp4_sink
                 )
             )
             | "Write to PubSub" >> beam.io.WriteToPubSub(output_topic_path)
         )
 
-        _ = (
-            session_accumulating_dataframe
-            | "Write session windows to Parquet"
-            >> beam.ParDo(
-                WriteWindowedParquet(
-                    args.session_window_health_trend_sink,
-                    NestedWindowedHealthTrend.pyarrow_schema(),
-                )
-            )
-        )
+        # _ = (
+        #     session_accumulating_dataframe
+        #     | "Write session windows to Parquet"
+        #     >> beam.ParDo(
+        #         WriteWindowedParquet(
+        #             args.session_window_health_trend_sink,
+        #             NestedWindowedHealthTrend.pyarrow_schema(),
+        #         )
+        #     )
+        # )

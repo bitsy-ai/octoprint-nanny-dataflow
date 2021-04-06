@@ -11,11 +11,11 @@ from print_nanny_dataflow.encoders.types import (
     NestedTelemetryEvent,
     WindowedHealthRecord,
     DeviceCalibration,
-    CreateVideoMessage,
+    RenderVideoMessage,
     AnnotatedImage,
     CATEGORY_INDEX,
     NestedWindowedHealthTrend,
-    CreateVideoMessage,
+    RenderVideoMessage,
     Metadata,
 )
 import PIL

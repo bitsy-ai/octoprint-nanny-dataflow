@@ -13,7 +13,7 @@ import subprocess
 import apache_beam as beam
 from apache_beam.options.pipeline_options import PipelineOptions
 from print_nanny_dataflow.encoders.types import (
-    CreateVideoMessage,
+    RenderVideoMessage,
 )
 from apache_beam.transforms.trigger import AfterCount, AfterWatermark, AfterAny
 import print_nanny_dataflow
@@ -63,12 +63,12 @@ class TriggerAlert(beam.DoFn):
             asyncio.set_event_loop(loop)
         return loop.run_until_complete(self.trigger_alert_async(session, filepath))
 
-    def process(self, msg: CreateVideoMessage):
+    def process(self, msg: RenderVideoMessage):
         yield self.trigger_alert(msg.session, msg.gcs_prefix_out)
 
 
 class RenderVideo(beam.DoFn):
-    def process(self, msg: CreateVideoMessage) -> Iterable[CreateVideoMessage]:
+    def process(self, msg: RenderVideoMessage) -> Iterable[RenderVideoMessage]:
         path = os.path.dirname(print_nanny_dataflow.__file__)
         script = os.path.join(path, "scripts", "render_video.sh")
         val = subprocess.check_call(
@@ -135,7 +135,7 @@ if __name__ == "__main__":
                 trigger=alert_pipeline_trigger,
                 accumulation_mode=beam.transforms.trigger.AccumulationMode.DISCARDING,
             )
-            | "Decode bytes" >> beam.Map(lambda b: CreateVideoMessage.from_bytes(b))
+            | "Decode bytes" >> beam.Map(lambda b: RenderVideoMessage.from_bytes(b))
             | "Run render_video.sh" >> beam.ParDo(RenderVideo())
             | "Trigger alert" >> beam.ParDo(TriggerAlert(args.api_url, args.api_token))
             | beam.Map(print)
