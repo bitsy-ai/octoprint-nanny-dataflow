@@ -77,7 +77,7 @@ class RestAPIClient:
             api_instance = print_nanny_client.AlertsApi(api_client=api_client)
 
             request = print_nanny_client.CreatePrintSessionAlertRequest(**kwargs)
-            return await api_instance.defect_alert_create(request)
+            return await api_instance.print_session_alert_create(request)
 
     @backoff.on_exception(
         backoff.expo,
