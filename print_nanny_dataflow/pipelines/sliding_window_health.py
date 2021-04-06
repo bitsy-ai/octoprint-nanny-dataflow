@@ -335,7 +335,7 @@ if __name__ == "__main__":
         # alert_pipeline_trigger = AfterWatermark(
         #     early=AfterProcessingTime(args.health_window_period), late=AfterCount(1)
         # )
-        session_gap = int(args.health_window_period * 1.5)
+        session_gap = args.health_window_period
         logging.info(f"Accumulating events with session gap={session_gap}")
 
         # accumulates failure count
@@ -345,7 +345,7 @@ if __name__ == "__main__":
                 beam.transforms.window.Sessions(session_gap),
                 # TODO re-enable with MonitorHealthStateful
                 # trigger=alert_pipeline_trigger,
-                accumulation_mode=beam.transforms.trigger.AccumulationMode.ACCUMULATING,
+                accumulation_mode=beam.transforms.trigger.AccumulationMode.DISCARDING,
             )
             | beam.GroupByKey()
             # | "Stateful health score threshold monitor"

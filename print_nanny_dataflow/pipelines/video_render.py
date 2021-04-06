@@ -1,6 +1,7 @@
 import logging
 import argparse
 import os
+import asyncio
 from typing import (
     Tuple,
     Any,
@@ -16,6 +17,7 @@ from print_nanny_dataflow.encoders.types import (
 )
 from apache_beam.transforms.trigger import AfterCount, AfterWatermark, AfterAny
 import print_nanny_dataflow
+from print_nanny_dataflow.clients.rest import RestAPIClient
 
 logger = logging.getLogger(__name__)
 
@@ -59,15 +61,14 @@ class TriggerAlert(beam.DoFn):
         except RuntimeError:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-        loop.run_until_complete(self.trigger_alert_async(session, filepath))
+        return loop.run_until_complete(self.trigger_alert_async(session, filepath))
 
-    def process(self, element: Tuple[str, CreateVideoMessage]):
-        session, msg = element
-        yield self.trigger_alert(session, msg.gcs_prefix_out)
+    def process(self, msg: CreateVideoMessage):
+        yield self.trigger_alert(msg.session, msg.gcs_prefix_out)
 
 
 class RenderVideo(beam.DoFn):
-    def process(self, msg: CreateVideoMessage):
+    def process(self, msg: CreateVideoMessage) -> Iterable[CreateVideoMessage]:
         path = os.path.dirname(print_nanny_dataflow.__file__)
         script = os.path.join(path, "scripts", "render_video.sh")
         val = subprocess.check_call(
@@ -82,7 +83,7 @@ class RenderVideo(beam.DoFn):
             ]
         )
         logger.info(val)
-        yield msg.session, CreateVideoMessage
+        yield msg
 
 
 if __name__ == "__main__":
@@ -137,4 +138,5 @@ if __name__ == "__main__":
             | "Decode bytes" >> beam.Map(lambda b: CreateVideoMessage.from_bytes(b))
             | "Run render_video.sh" >> beam.ParDo(RenderVideo())
             | "Trigger alert" >> beam.ParDo(TriggerAlert(args.api_url, args.api_token))
+            | beam.Map(print)
         )
