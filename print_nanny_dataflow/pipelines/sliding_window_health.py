@@ -331,17 +331,20 @@ if __name__ == "__main__":
             | "Windowed health DataFrame" >> beam.ParDo(SortWindowedHealthDataframe())
         )
 
-        alert_pipeline_trigger = AfterWatermark(
-            early=AfterProcessingTime(args.health_window_period), late=AfterCount(1)
-        )
+        # TODO re-enable Afterwatermark triggers with MonitorHealthStateful
+        # alert_pipeline_trigger = AfterWatermark(
+        #     early=AfterProcessingTime(args.health_window_period), late=AfterCount(1)
+        # )
         session_gap = args.health_window_period * 3
+        logging.info(f"Accumulating events with session gap={session_gap}")
 
         # accumulates failure count
         session_accumulating_dataframe = (
             windowed_health_dataframe
             | beam.WindowInto(
                 beam.transforms.window.Sessions(session_gap),
-                trigger=alert_pipeline_trigger,
+                # TODO re-enable with MonitorHealthStateful
+                # trigger=alert_pipeline_trigger,
                 accumulation_mode=beam.transforms.trigger.AccumulationMode.ACCUMULATING,
             )
             | beam.GroupByKey()

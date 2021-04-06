@@ -26,7 +26,7 @@ class FileSpec(NamedTuple):
     gcs_outfile: str
 
 
-class RenderVideoTriggerAlert(beam.DoFn):
+class TriggerAlert(beam.DoFn):
     def __init__(
         self,
         video_upload_path,
