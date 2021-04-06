@@ -20,6 +20,14 @@ import print_nanny_dataflow
 logger = logging.getLogger(__name__)
 
 
+def _upload_to(session):
+    datesegment = dateformat.format(timezone.now(), "Y/M/d/")
+    path = os.path.join(
+        f"uploads/PrintSessionAlert", datesegment, session, "annotated_video.mp4"
+    )
+    return path
+
+
 class FileSpec(NamedTuple):
     session: str
     gcs_prefix: str
@@ -29,35 +37,33 @@ class FileSpec(NamedTuple):
 class TriggerAlert(beam.DoFn):
     def __init__(
         self,
-        video_upload_path,
         api_url,
         api_token,
     ):
         self.api_url = api_url
         self.api_token = api_token
-        self.video_upload_path = video_upload_path
 
-    async def trigger_alert_async(self, session: str):
+    async def trigger_alert_async(self, session: str, filepath: str):
         rest_client = RestAPIClient(api_token=self.api_token, api_url=self.api_url)
 
-        res = await rest_client.create_defect_alert(
-            print_session=session,
+        res = await rest_client.create_print_session_alert(
+            print_session=session, annotated_video=filepath
         )
 
-        logger.info(f"create_defect_alert res={res}")
+        logger.info(f"create_print_session_alert res={res}")
 
-    def trigger_alert(self, session: str):
+    def trigger_alert(self, session: str, filepath):
         logger.warning(f"Sending alert for session={session}")
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-        loop.run_until_complete(self.trigger_alert_async(session))
+        loop.run_until_complete(self.trigger_alert_async(session, filepath))
 
-    def should_alert(self, session):
-        logging.info(f"should_alert=True for session={session}")
-        return True
+    def process(self, element: Tuple[str, CreateVideoMessage]):
+        session, msg = element
+        yield self.trigger_alert(session, msg.gcs_prefix_out)
 
 
 class RenderVideo(beam.DoFn):
@@ -75,7 +81,8 @@ class RenderVideo(beam.DoFn):
                 msg.gcs_prefix_out,
             ]
         )
-        yield msg.session, val
+        logger.info(val)
+        yield msg.session, CreateVideoMessage
 
 
 if __name__ == "__main__":
@@ -129,5 +136,5 @@ if __name__ == "__main__":
             )
             | "Decode bytes" >> beam.Map(lambda b: CreateVideoMessage.from_bytes(b))
             | "Run render_video.sh" >> beam.ParDo(RenderVideo())
-            | beam.Map(print)
+            | "Trigger alert" >> beam.ParDo(TriggerAlert(args.api_url, args.api_token))
         )

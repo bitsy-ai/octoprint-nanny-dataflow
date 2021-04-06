@@ -235,7 +235,7 @@ class ShouldPublishAlert(beam.DoFn):
     ) -> Iterable[bytes]:
         key, values = element
         gcs_prefix_in = os.path.join(self.in_base_path, key)
-        gcs_prefix_out = os.path.join(self.out_base_path, key)
+        gcs_prefix_out = os.path.join(self.out_base_path, key, "annotated_video.mp4")
         # publish video rendering message
         if pane_info.is_last:
             msg = CreateVideoMessage(

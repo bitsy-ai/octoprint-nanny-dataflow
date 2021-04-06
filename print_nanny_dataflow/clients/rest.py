@@ -72,6 +72,19 @@ class RestAPIClient:
         max_time=MAX_BACKOFF_TIME,
         jitter=backoff.random_jitter,
     )
+    async def create_print_session_alert(self, **kwargs):
+        async with print_nanny_client.ApiClient(self._api_config) as api_client:
+            api_instance = print_nanny_client.AlertsApi(api_client=api_client)
+
+            request = print_nanny_client.CreatePrintSessionAlertRequest(**kwargs)
+            return await api_instance.defect_alert_create(request)
+
+    @backoff.on_exception(
+        backoff.expo,
+        aiohttp.ClientConnectionError,
+        max_time=MAX_BACKOFF_TIME,
+        jitter=backoff.random_jitter,
+    )
     async def get_print_session(self, print_session):
         async with print_nanny_client.ApiClient(self._api_config) as api_client:
             api_instance = print_nanny_client.RemoteControlApi(api_client=api_client)
