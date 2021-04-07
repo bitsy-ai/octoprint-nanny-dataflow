@@ -1,6 +1,6 @@
 from typing import Tuple, Iterable, Optional, Any, NamedTuple
 import logging
-
+from datetime import datetime
 import os
 import io
 import numpy as np
@@ -236,13 +236,11 @@ class CreateVideoRenderMessage(beam.DoFn):
         pane_info=beam.DoFn.PaneInfoParam,
     ) -> Iterable[bytes]:
         key, values = element
-        datestamp = datetime.datetime.now().strftime("%Y/%m/%d")
+        datestamp = datetime.now().strftime("%Y/%m/%d")
 
         gcs_prefix_in = os.path.join(self.in_base_path, key)
         gcs_prefix_out = os.path.join(self.out_base_path, key, "annotated_video.mp4")
         cdn_prefix_out = os.path.join(
-            "gs://",
-            self.bucket,
             self.cdn_base_path,
             key,
             datestamp,

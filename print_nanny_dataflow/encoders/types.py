@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 import nptyping as npt
 import tensorflow as tf
+import os
 from tensorflow_transform.tf_metadata import schema_utils
 from tensorflow_transform.tf_metadata import dataset_metadata
 from tensorflow_metadata.proto.v0 import schema_pb2
