@@ -119,6 +119,11 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "--cdn-base-path",
+        default="uploads/PrintSessionAlert",
+    )
+
+    parser.add_argument(
         "--render-video-topic",
         default="monitoring-video-render",
         help="Video rendering and alert push jobs will be published to this PubSub topic",
@@ -201,7 +206,6 @@ if __name__ == "__main__":
         "--batch-size",
         default=256,
     )
-
     parser.add_argument("--runner", default="DataflowRunner")
 
     args, pipeline_args = parser.parse_known_args()
@@ -357,7 +361,10 @@ if __name__ == "__main__":
             | "Should alert for session?"
             >> beam.ParDo(
                 CreateVideoRenderMessage(
-                    args.fixed_window_jpg_sink, args.fixed_window_mp4_sink
+                    args.fixed_window_jpg_sink,
+                    args.fixed_window_mp4_sink,
+                    args.cdn_base_path,
+                    args.bucket,
                 )
             )
             | "Write to PubSub" >> beam.io.WriteToPubSub(output_topic_path)

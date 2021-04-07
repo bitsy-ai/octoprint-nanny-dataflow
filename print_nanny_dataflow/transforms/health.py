@@ -223,9 +223,11 @@ class SortWindowedHealthDataframe(beam.DoFn):
 
 
 class CreateVideoRenderMessage(beam.DoFn):
-    def __init__(self, in_base_path, out_base_path):
+    def __init__(self, in_base_path, out_base_path, cdn_base_path, bucket):
         self.in_base_path = in_base_path
         self.out_base_path = out_base_path
+        self.cdn_base_path = cdn_base_path
+        self.bucket = bucket
 
     def process(
         self,
@@ -234,8 +236,18 @@ class CreateVideoRenderMessage(beam.DoFn):
         pane_info=beam.DoFn.PaneInfoParam,
     ) -> Iterable[bytes]:
         key, values = element
+        datestamp = datetime.datetime.now().strftime("%Y/%m/%d")
+
         gcs_prefix_in = os.path.join(self.in_base_path, key)
         gcs_prefix_out = os.path.join(self.out_base_path, key, "annotated_video.mp4")
+        cdn_prefix_out = os.path.join(
+            "gs://",
+            self.bucket,
+            self.cdn_base_path,
+            key,
+            datestamp,
+            "annotated_video.mp4",
+        )
         # publish video rendering message
         if pane_info.is_last:
             msg = RenderVideoMessage(
@@ -244,6 +256,8 @@ class CreateVideoRenderMessage(beam.DoFn):
                 alert_type=AlertMessageType.SESSION_DONE,
                 gcs_prefix_in=gcs_prefix_in,
                 gcs_prefix_out=gcs_prefix_out,
+                cdn_prefix_out=cdn_prefix_out,
+                bucket=self.bucket,
             ).to_bytes()
             yield msg
         # @TODO analyze production distribution and write alert behavior for session panes
@@ -254,6 +268,8 @@ class CreateVideoRenderMessage(beam.DoFn):
                 alert_type=AlertMessageType.FAILURE,
                 gcs_prefix_in=gcs_prefix_in,
                 gcs_prefix_out=gcs_prefix_out,
+                cdn_prefix_out=cdn_prefix_out,
+                bucket=self.bucket,
             ).to_bytes()
             yield msg
 

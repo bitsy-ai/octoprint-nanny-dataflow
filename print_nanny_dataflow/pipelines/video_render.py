@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 def _upload_to(session):
-    datesegment = dateformat.format(timezone.now(), "Y/M/d/")
+    datesegment = dateformat.format(timezone.now(), "Y/m/d/")
     path = os.path.join(
         f"uploads/PrintSessionAlert", datesegment, session, "annotated_video.mp4"
     )
@@ -64,7 +64,7 @@ class TriggerAlert(beam.DoFn):
         return loop.run_until_complete(self.trigger_alert_async(session, filepath))
 
     def process(self, msg: RenderVideoMessage):
-        yield self.trigger_alert(msg.session, msg.gcs_prefix_out)
+        yield self.trigger_alert(msg.session, msg.cdn_prefix_out)
 
 
 class RenderVideo(beam.DoFn):
@@ -80,6 +80,8 @@ class RenderVideo(beam.DoFn):
                 msg.session,
                 "-o",
                 msg.gcs_prefix_out,
+                "-c",
+                msg.full_cdn_path(),
             ]
         )
         logger.info(val)
