@@ -1,7 +1,7 @@
 #!/bin/bash
 
 echo "Processing $@"
-while getopts ":i:o:s:b:" opt; do
+while getopts ":i:o:s:c:" opt; do
   case ${opt} in
     i )
       INPUT_PATH="$OPTARG"
@@ -12,12 +12,10 @@ while getopts ":i:o:s:b:" opt; do
     o )
       OUTPUT_FILE="$OPTARG"
       ;;
-    b )
-      OUTPUT_FILE="$OPTARG"
     c )
       COPY_OUTPUT_FILE="$OPTARG"
       ;;
-    \? ) echo "Usage: cmd [-i] [-s] [-o]"
+    \? ) echo "Usage: cmd [-i] [-s] [-o] [-c] [-b]"
       ;;
   esac
 done

@@ -18,6 +18,7 @@ from print_nanny_dataflow.encoders.types import (
 from apache_beam.transforms.trigger import AfterCount, AfterWatermark, AfterAny
 import print_nanny_dataflow
 from print_nanny_dataflow.clients.rest import RestAPIClient
+import print_nanny_client
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,10 @@ class TriggerAlert(beam.DoFn):
         return loop.run_until_complete(self.trigger_alert_async(session, filepath))
 
     def process(self, msg: RenderVideoMessage):
-        yield self.trigger_alert(msg.session, msg.cdn_prefix_out)
+        try:
+            yield self.trigger_alert(msg.session, msg.cdn_prefix_out)
+        except print_nanny_client.exceptions.ApiException as e:
+            logger.error(e)
 
 
 class RenderVideo(beam.DoFn):
