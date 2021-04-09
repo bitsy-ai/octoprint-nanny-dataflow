@@ -120,6 +120,11 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--cdn-base-path",
+        default="media",
+    )
+
+    parser.add_argument(
+        "--cdn-upload-path",
         default="uploads/PrintSessionAlert",
     )
 
@@ -353,7 +358,7 @@ if __name__ == "__main__":
             )
             | beam.GroupByKey()
             # | "Stateful health score threshold monitor"
-            # >> beam.ParDo(MonitorHealthStateful(output_topic_path))
+            # >> beam.ParDo(MonitorHealthStateful(output_topic_path))FW
         )
 
         on_session_end = (
@@ -364,6 +369,7 @@ if __name__ == "__main__":
                     args.fixed_window_jpg_sink,
                     args.fixed_window_mp4_sink,
                     args.cdn_base_path,
+                    args.cdn_upload_path,
                     args.bucket,
                 )
             )

@@ -23,14 +23,6 @@ import print_nanny_client
 logger = logging.getLogger(__name__)
 
 
-def _upload_to(session):
-    datesegment = dateformat.format(timezone.now(), "Y/m/d/")
-    path = os.path.join(
-        f"media/uploads/PrintSessionAlert", datesegment, session, "annotated_video.mp4"
-    )
-    return path
-
-
 class FileSpec(NamedTuple):
     session: str
     gcs_prefix: str
@@ -66,7 +58,7 @@ class TriggerAlert(beam.DoFn):
 
     def process(self, msg: RenderVideoMessage):
         try:
-            yield self.trigger_alert(msg.session, msg.cdn_prefix_out)
+            yield self.trigger_alert(msg.session, msg.cdn_suffix)
         except print_nanny_client.exceptions.ApiException as e:
             logger.error(e)
 

@@ -78,6 +78,7 @@ class RenderVideoMessage(NamedTuple):
     gcs_prefix_in: str
     gcs_prefix_out: str
     cdn_prefix_out: str
+    cdn_suffix: str
     bucket: str
 
     def full_cdn_path(self):
@@ -97,6 +98,7 @@ class RenderVideoMessage(NamedTuple):
                     gcs_prefix_in=self.gcs_prefix_in,
                     gcs_prefix_out=self.gcs_prefix_out,
                     cdn_prefix_out=self.cdn_prefix_out,
+                    cdn_suffix=self.cdn_suffix,
                     bucket=self.bucket,
                 )
             )

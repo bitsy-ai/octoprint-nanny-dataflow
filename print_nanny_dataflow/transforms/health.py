@@ -223,10 +223,13 @@ class SortWindowedHealthDataframe(beam.DoFn):
 
 
 class CreateVideoRenderMessage(beam.DoFn):
-    def __init__(self, in_base_path, out_base_path, cdn_base_path, bucket):
+    def __init__(
+        self, in_base_path, out_base_path, cdn_base_path, cdn_upload_path, bucket
+    ):
         self.in_base_path = in_base_path
         self.out_base_path = out_base_path
         self.cdn_base_path = cdn_base_path
+        self.cdn_upload_path = cdn_upload_path
         self.bucket = bucket
 
     def process(
@@ -240,12 +243,16 @@ class CreateVideoRenderMessage(beam.DoFn):
 
         gcs_prefix_in = os.path.join(self.in_base_path, key)
         gcs_prefix_out = os.path.join(self.out_base_path, key, "annotated_video.mp4")
-        cdn_prefix_out = os.path.join(
-            self.cdn_base_path,
+
+        suffix = os.path.join(
             key,
             datestamp,
             "annotated_video.mp4",
         )
+        cdn_prefix_out = os.path.join(self.cdn_base_path, self.cdn_upload_path, suffix)
+
+        cdn_suffix = os.path.join(self.cdn_upload_path, suffix)
+
         # publish video rendering message
         if pane_info.is_last:
             msg = RenderVideoMessage(
@@ -255,6 +262,7 @@ class CreateVideoRenderMessage(beam.DoFn):
                 gcs_prefix_in=gcs_prefix_in,
                 gcs_prefix_out=gcs_prefix_out,
                 cdn_prefix_out=cdn_prefix_out,
+                cdn_suffix=cdn_suffix,
                 bucket=self.bucket,
             ).to_bytes()
             yield msg
@@ -267,6 +275,7 @@ class CreateVideoRenderMessage(beam.DoFn):
                 gcs_prefix_in=gcs_prefix_in,
                 gcs_prefix_out=gcs_prefix_out,
                 cdn_prefix_out=cdn_prefix_out,
+                cdn_suffix=cdn_suffix,
                 bucket=self.bucket,
             ).to_bytes()
             yield msg
