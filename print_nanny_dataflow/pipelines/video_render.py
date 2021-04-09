@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 def _upload_to(session):
     datesegment = dateformat.format(timezone.now(), "Y/m/d/")
     path = os.path.join(
-        f"uploads/PrintSessionAlert", datesegment, session, "annotated_video.mp4"
+        f"media/uploads/PrintSessionAlert", datesegment, session, "annotated_video.mp4"
     )
     return path
 

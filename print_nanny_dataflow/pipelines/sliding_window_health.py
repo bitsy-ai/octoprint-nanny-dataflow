@@ -339,7 +339,7 @@ if __name__ == "__main__":
         # alert_pipeline_trigger = AfterWatermark(
         #     early=AfterProcessingTime(args.health_window_period), late=AfterCount(1)
         # )
-        session_gap = args.health_window_period
+        session_gap = args.health_window_period * 2
         logging.info(f"Accumulating events with session gap={session_gap}")
 
         # accumulates failure count
