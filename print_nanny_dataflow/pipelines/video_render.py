@@ -1,6 +1,7 @@
 import logging
 import argparse
 import os
+import asyncio
 from typing import (
     Tuple,
     Any,
@@ -12,10 +13,12 @@ import subprocess
 import apache_beam as beam
 from apache_beam.options.pipeline_options import PipelineOptions
 from print_nanny_dataflow.encoders.types import (
-    CreateVideoMessage,
+    RenderVideoMessage,
 )
 from apache_beam.transforms.trigger import AfterCount, AfterWatermark, AfterAny
 import print_nanny_dataflow
+from print_nanny_dataflow.clients.rest import RestAPIClient
+import print_nanny_client
 
 logger = logging.getLogger(__name__)
 
@@ -26,42 +29,42 @@ class FileSpec(NamedTuple):
     gcs_outfile: str
 
 
-class RenderVideoTriggerAlert(beam.DoFn):
+class TriggerAlert(beam.DoFn):
     def __init__(
         self,
-        video_upload_path,
         api_url,
         api_token,
     ):
         self.api_url = api_url
         self.api_token = api_token
-        self.video_upload_path = video_upload_path
 
-    async def trigger_alert_async(self, session: str):
+    async def trigger_alert_async(self, session: str, filepath: str):
         rest_client = RestAPIClient(api_token=self.api_token, api_url=self.api_url)
 
-        res = await rest_client.create_defect_alert(
-            print_session=session,
+        res = await rest_client.create_print_session_alert(
+            print_session=session, annotated_video=filepath
         )
 
-        logger.info(f"create_defect_alert res={res}")
+        logger.info(f"create_print_session_alert res={res}")
 
-    def trigger_alert(self, session: str):
+    def trigger_alert(self, session: str, filepath):
         logger.warning(f"Sending alert for session={session}")
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-        loop.run_until_complete(self.trigger_alert_async(session))
+        return loop.run_until_complete(self.trigger_alert_async(session, filepath))
 
-    def should_alert(self, session):
-        logging.info(f"should_alert=True for session={session}")
-        return True
+    def process(self, msg: RenderVideoMessage):
+        try:
+            yield self.trigger_alert(msg.session, msg.cdn_suffix)
+        except print_nanny_client.exceptions.ApiException as e:
+            logger.error(e)
 
 
 class RenderVideo(beam.DoFn):
-    def process(self, msg: CreateVideoMessage):
+    def process(self, msg: RenderVideoMessage) -> Iterable[RenderVideoMessage]:
         path = os.path.dirname(print_nanny_dataflow.__file__)
         script = os.path.join(path, "scripts", "render_video.sh")
         val = subprocess.check_call(
@@ -73,9 +76,12 @@ class RenderVideo(beam.DoFn):
                 msg.session,
                 "-o",
                 msg.gcs_prefix_out,
+                "-c",
+                msg.full_cdn_path(),
             ]
         )
-        yield msg.session, val
+        logger.info(val)
+        yield msg
 
 
 if __name__ == "__main__":
@@ -127,7 +133,8 @@ if __name__ == "__main__":
                 trigger=alert_pipeline_trigger,
                 accumulation_mode=beam.transforms.trigger.AccumulationMode.DISCARDING,
             )
-            | "Decode bytes" >> beam.Map(lambda b: CreateVideoMessage.from_bytes(b))
+            | "Decode bytes" >> beam.Map(lambda b: RenderVideoMessage.from_bytes(b))
             | "Run render_video.sh" >> beam.ParDo(RenderVideo())
+            | "Trigger alert" >> beam.ParDo(TriggerAlert(args.api_url, args.api_token))
             | beam.Map(print)
         )

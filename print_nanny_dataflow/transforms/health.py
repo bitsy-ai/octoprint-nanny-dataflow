@@ -1,6 +1,6 @@
 from typing import Tuple, Iterable, Optional, Any, NamedTuple
 import logging
-
+from datetime import datetime
 import os
 import io
 import numpy as np
@@ -14,7 +14,7 @@ from print_nanny_dataflow.encoders.types import (
     WindowedHealthRecord,
     NestedWindowedHealthTrend,
     DeviceCalibration,
-    CreateVideoMessage,
+    RenderVideoMessage,
     Metadata,
     NestedWindowedHealthTrend,
     CATEGORY_INDEX,
@@ -222,10 +222,15 @@ class SortWindowedHealthDataframe(beam.DoFn):
         )
 
 
-class ShouldPublishAlert(beam.DoFn):
-    def __init__(self, in_base_path, out_base_path):
+class CreateVideoRenderMessage(beam.DoFn):
+    def __init__(
+        self, in_base_path, out_base_path, cdn_base_path, cdn_upload_path, bucket
+    ):
         self.in_base_path = in_base_path
         self.out_base_path = out_base_path
+        self.cdn_base_path = cdn_base_path
+        self.cdn_upload_path = cdn_upload_path
+        self.bucket = bucket
 
     def process(
         self,
@@ -234,26 +239,44 @@ class ShouldPublishAlert(beam.DoFn):
         pane_info=beam.DoFn.PaneInfoParam,
     ) -> Iterable[bytes]:
         key, values = element
+        datestamp = datetime.now().strftime("%Y/%m/%d")
+
         gcs_prefix_in = os.path.join(self.in_base_path, key)
-        gcs_prefix_out = os.path.join(self.out_base_path, key)
+        gcs_prefix_out = os.path.join(self.out_base_path, key, "annotated_video.mp4")
+
+        suffix = os.path.join(
+            key,
+            datestamp,
+            "annotated_video.mp4",
+        )
+        cdn_prefix_out = os.path.join(self.cdn_base_path, self.cdn_upload_path, suffix)
+
+        cdn_suffix = os.path.join(self.cdn_upload_path, suffix)
+
         # publish video rendering message
         if pane_info.is_last:
-            msg = CreateVideoMessage(
+            msg = RenderVideoMessage(
                 session=key,
                 metadata=values[0].metadata,
                 alert_type=AlertMessageType.SESSION_DONE,
                 gcs_prefix_in=gcs_prefix_in,
                 gcs_prefix_out=gcs_prefix_out,
+                cdn_prefix_out=cdn_prefix_out,
+                cdn_suffix=cdn_suffix,
+                bucket=self.bucket,
             ).to_bytes()
             yield msg
         # @TODO analyze production distribution and write alert behavior for session panes
         else:
-            msg = CreateVideoMessage(
+            msg = RenderVideoMessage(
                 session=key,
                 metadata=values[0].metadata,
                 alert_type=AlertMessageType.FAILURE,
                 gcs_prefix_in=gcs_prefix_in,
                 gcs_prefix_out=gcs_prefix_out,
+                cdn_prefix_out=cdn_prefix_out,
+                cdn_suffix=cdn_suffix,
+                bucket=self.bucket,
             ).to_bytes()
             yield msg
 
@@ -314,7 +337,7 @@ class MonitorHealthStateful(beam.DoFn):
         #     logger.info(f"Last pane fired in pane_info={pane_info} window={window} failures={current_failures}")
 
         #     # Exception: PubSub I/O is only available in streaming mode (use the --streaming flag). [while running 'Stateful health score threshold monitor']
-        # pending_alert = CreateVideoMessage(
+        # pending_alert = RenderVideoMessage(
         #     metadata=value.metadata,
         #     session=key,
         # )

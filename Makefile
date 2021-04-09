@@ -31,7 +31,7 @@ docker-image:
 	gcloud builds submit --tag gcr.io/${PROJECT}/print-nanny-dataflow:$(shell git rev-parse HEAD)
 
 direct:
-	$(PYTHON)-m $(PIPELINE) \
+	$(PYTHON) -m $(PIPELINE) \
 	--runner DirectRunner \
 	--loglevel INFO \
 	--api-url=$(PRINT_NANNY_API_URL) \

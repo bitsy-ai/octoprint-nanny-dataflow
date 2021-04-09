@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 import nptyping as npt
 import tensorflow as tf
+import os
 from tensorflow_transform.tf_metadata import schema_utils
 from tensorflow_transform.tf_metadata import dataset_metadata
 from tensorflow_metadata.proto.v0 import schema_pb2
@@ -70,12 +71,18 @@ class AlertMessageType(Enum):
     SESSION_DONE = 2
 
 
-class CreateVideoMessage(NamedTuple):
+class RenderVideoMessage(NamedTuple):
     session: str
     metadata: Metadata
     alert_type: AlertMessageType
     gcs_prefix_in: str
     gcs_prefix_out: str
+    cdn_prefix_out: str
+    cdn_suffix: str
+    bucket: str
+
+    def full_cdn_path(self):
+        return os.path.join("gs://", self.bucket, self.cdn_prefix_out)
 
     def to_dict(self) -> Dict[str, Any]:
         return self._asdict()
@@ -90,6 +97,9 @@ class CreateVideoMessage(NamedTuple):
                     alert_type=self.alert_type.value,
                     gcs_prefix_in=self.gcs_prefix_in,
                     gcs_prefix_out=self.gcs_prefix_out,
+                    cdn_prefix_out=self.cdn_prefix_out,
+                    cdn_suffix=self.cdn_suffix,
+                    bucket=self.bucket,
                 )
             )
             .to_buffer()

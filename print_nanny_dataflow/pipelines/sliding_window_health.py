@@ -46,7 +46,7 @@ from print_nanny_dataflow.transforms.health import (
     FilterAreaOfInterest,
     SortWindowedHealthDataframe,
     MonitorHealthStateful,
-    ShouldPublishAlert,
+    CreateVideoRenderMessage,
 )
 
 from print_nanny_dataflow.transforms.video import WriteAnnotatedImage
@@ -116,6 +116,16 @@ if __name__ == "__main__":
         "--bucket",
         default="print-nanny-sandbox",
         help="GCS Bucket",
+    )
+
+    parser.add_argument(
+        "--cdn-base-path",
+        default="media",
+    )
+
+    parser.add_argument(
+        "--cdn-upload-path",
+        default="uploads/PrintSessionAlert",
     )
 
     parser.add_argument(
@@ -201,7 +211,6 @@ if __name__ == "__main__":
         "--batch-size",
         default=256,
     )
-
     parser.add_argument("--runner", default="DataflowRunner")
 
     args, pipeline_args = parser.parse_known_args()
@@ -331,42 +340,49 @@ if __name__ == "__main__":
             | "Windowed health DataFrame" >> beam.ParDo(SortWindowedHealthDataframe())
         )
 
-        alert_pipeline_trigger = AfterWatermark(
-            early=AfterProcessingTime(args.health_window_period), late=AfterCount(1)
-        )
-        session_gap = args.health_window_period * 3
+        # TODO re-enable Afterwatermark triggers with MonitorHealthStateful
+        # alert_pipeline_trigger = AfterWatermark(
+        #     early=AfterProcessingTime(args.health_window_period), late=AfterCount(1)
+        # )
+        session_gap = args.health_window_period * 2
+        logging.info(f"Accumulating events with session gap={session_gap}")
 
         # accumulates failure count
         session_accumulating_dataframe = (
             windowed_health_dataframe
             | beam.WindowInto(
                 beam.transforms.window.Sessions(session_gap),
-                trigger=alert_pipeline_trigger,
-                accumulation_mode=beam.transforms.trigger.AccumulationMode.ACCUMULATING,
+                # TODO re-enable with MonitorHealthStateful
+                # trigger=alert_pipeline_trigger,
+                accumulation_mode=beam.transforms.trigger.AccumulationMode.DISCARDING,
             )
             | beam.GroupByKey()
             # | "Stateful health score threshold monitor"
-            # >> beam.ParDo(MonitorHealthStateful(output_topic_path))
+            # >> beam.ParDo(MonitorHealthStateful(output_topic_path))FW
         )
 
         on_session_end = (
             session_accumulating_dataframe
             | "Should alert for session?"
             >> beam.ParDo(
-                ShouldPublishAlert(
-                    args.fixed_window_jpg_sink, args.fixed_window_mp4_sink
+                CreateVideoRenderMessage(
+                    args.fixed_window_jpg_sink,
+                    args.fixed_window_mp4_sink,
+                    args.cdn_base_path,
+                    args.cdn_upload_path,
+                    args.bucket,
                 )
             )
             | "Write to PubSub" >> beam.io.WriteToPubSub(output_topic_path)
         )
 
-        _ = (
-            session_accumulating_dataframe
-            | "Write session windows to Parquet"
-            >> beam.ParDo(
-                WriteWindowedParquet(
-                    args.session_window_health_trend_sink,
-                    NestedWindowedHealthTrend.pyarrow_schema(),
-                )
-            )
-        )
+        # _ = (
+        #     session_accumulating_dataframe
+        #     | "Write session windows to Parquet"
+        #     >> beam.ParDo(
+        #         WriteWindowedParquet(
+        #             args.session_window_health_trend_sink,
+        #             NestedWindowedHealthTrend.pyarrow_schema(),
+        #         )
+        #     )
+        # )
