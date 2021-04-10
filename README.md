@@ -4,21 +4,43 @@ This repo contains the batch and stream processing jobs for Print Nanny.
 https://www.print-nanny.com/
 
 
-### Authentication
+## GCP Authentication
 
 ```bash
 $ gcloud auth login
 $ gcloud auth application-default login
 ```
 
-### Running the pipelines
+## Environment Variables
 
-Start a local `DirectRunner` with debug-level output:
-```
-$ make local-dev
+```bash
+. sandbox.env
 ```
 
-Run the pipeline in GCP Dataflow
+or
+```bash
+. prod.env
 ```
-$ make dataflow-prod
+
+## Run Apache Beam Pipelines
+
+### Run pipeline locally (DirectRunner)
+
+```
+$ make direct PIPELINE=print_nanny_dataflow.pipelines.video_render
+$ make direct PIPELINE=print_nanny_dataflow.pipelines.sliding_window_health
+```
+
+### Run pipeline in a Docker container (PortableRunner)
+
+```
+$ make portable PIPELINE=print_nanny_dataflow.pipelines.video_render
+$ make portable PIPELINE=print_nanny_dataflow.pipelines.sliding_window_health
+```
+
+### Run pipeline in GCP (DataflowRunner)
+
+```
+$ make dataflow PIPELINE=print_nanny_dataflow.pipelines.video_render
+$ make dataflow PIPELINE=print_nanny_dataflow.pipelines.sliding_window_health
 ```
