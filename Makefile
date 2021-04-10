@@ -6,8 +6,8 @@ PIP=.venv/bin/pip
 
 PROJECT ?= "print-nanny-sandbox"
 PRINT_NANNY_API_URL ?= "http://localhost:8000/api"
-IMAGE ?= "gcr.io/${PROJECT}/print-nanny-dataflow:2d1b0deebb019d21e429b374272ae73c52b7d491"
 PIPELINE ?= "print_nanny_dataflow.pipelines.sliding_window_health"
+IMAGE ?= "gcr.io/${PROJECT}/print-nanny-dataflow:$(shell git rev-parse HEAD)"
 
 clean-build: ## remove build artifacts
 	rm -fr build/
@@ -28,7 +28,7 @@ clean-pyc: ## remove Python file artifacts
 clean: clean-dist clean-pyc clean-build
 
 docker-image:
-	gcloud builds submit --tag gcr.io/${PROJECT}/print-nanny-dataflow:$(shell git rev-parse HEAD)
+	gcloud builds submit --tag $(IMAGE)
 
 direct:
 	$(PYTHON) -m $(PIPELINE) \
@@ -57,6 +57,10 @@ dataflow:
 	--runner DataflowRunner \
 	--api-url=$(PRINT_NANNY_API_URL) \
 	--api-token=$$PRINT_NANNY_API_TOKEN \
+	--project=$$PROJECT \
+	--region \
+	--experiment=use_runner_v2 \
+	--worker_harness_container_image=$(IMAGE)
 
 lint:
 	$(PYTHON) -m black setup.py print_nanny_dataflow conftest.py tests

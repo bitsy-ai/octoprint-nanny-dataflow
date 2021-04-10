@@ -67,9 +67,9 @@ import pyarrow as pa
 logger = logging.getLogger(__name__)
 
 
-async def download_active_experiment_model(tmp_dir=".tmp/", model_artifact_id=1):
+async def download_active_experiment_model(model_dir=".tmp/", model_artifact_id=1):
 
-    tmp_artifacts_tarball = os.path.join(tmp_dir, "artifacts.tar.gz")
+    tmp_artifacts_tarball = os.path.join(model_dir, "artifacts.tar.gz")
     rest_client = RestAPIClient(api_token=args.api_token, api_url=args.api_url)
 
     model_artifacts = await rest_client.get_model_artifact(model_artifact_id)
@@ -82,7 +82,7 @@ async def download_active_experiment_model(tmp_dir=".tmp/", model_artifact_id=1)
                 f.write(artifacts_gzipped)
             logger.info(f"Finished writing {tmp_artifacts_tarball}")
     with tarfile.open(tmp_artifacts_tarball, "r:gz") as tar:
-        tar.extractall(tmp_dir)
+        tar.extractall(model_dir)
     logger.info(f"Finished extracting {tmp_artifacts_tarball}")
 
 
@@ -205,7 +205,7 @@ if __name__ == "__main__":
         default="tflite-print3d_20201101015829-2021-02-24T05:16:05.082500Z",
     )
 
-    parser.add_argument("--tmp-dir", default=".tmp/", help="Filesystem tmp directory")
+    parser.add_argument("--model-dir", default="models/", help="Path to models")
 
     parser.add_argument(
         "--batch-size",
@@ -224,14 +224,10 @@ if __name__ == "__main__":
         "projects", args.project, "topics", args.render_video_topic
     )
 
-    # download model tarball
-    if args.runner == "DataflowRunner":
-        asyncio.get_event_loop.run_until_complete(download_active_experiment_model())
-
     # load input shape from model metadata
-    model_path = os.path.join(args.tmp_dir, args.model_version, "model.tflite")
+    model_path = os.path.join(args.model_dir, args.model_version, "model.tflite")
     model_metadata_path = os.path.join(
-        args.tmp_dir, args.model_version, "tflite_metadata.json"
+        args.model_dir, args.model_version, "tflite_metadata.json"
     )
     model_metadata = json.load(open(model_metadata_path, "r"))
     input_shape = model_metadata["inputShape"]
