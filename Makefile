@@ -8,6 +8,7 @@ PROJECT ?= "print-nanny-sandbox"
 PRINT_NANNY_API_URL ?= "http://localhost:8000/api"
 PIPELINE ?= "print_nanny_dataflow.pipelines.sliding_window_health"
 IMAGE ?= "gcr.io/${PROJECT}/print-nanny-dataflow:$(shell git rev-parse HEAD)"
+BUCKET ?= "print-nanny-sandbox"
 
 clean-build: ## remove build artifacts
 	rm -fr build/
@@ -57,10 +58,11 @@ dataflow:
 	--runner DataflowRunner \
 	--api-url=$(PRINT_NANNY_API_URL) \
 	--api-token=$$PRINT_NANNY_API_TOKEN \
-	--project=$$PROJECT \
-	--region \
+	--project=$(PROJECT) \
 	--experiment=use_runner_v2 \
-	--worker_harness_container_image=$(IMAGE)
+	--worker_harness_container_image=$(IMAGE) \
+	--temp_location=gs://$(BUCKET)/dataflow/tmp \
+	--staging_location=gs://$(BUCKET)/dataflow/staging
 
 lint:
 	$(PYTHON) -m black setup.py print_nanny_dataflow conftest.py tests
