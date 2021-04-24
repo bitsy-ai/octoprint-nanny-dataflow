@@ -217,7 +217,9 @@ if __name__ == "__main__":
 
     logging.basicConfig(level=getattr(logging, args.loglevel))
 
-    beam_options = PipelineOptions(pipeline_args, streaming=True, runner=args.runner, project=args.project)
+    beam_options = PipelineOptions(
+        pipeline_args, streaming=True, runner=args.runner, project=args.project
+    )
 
     input_topic_path = os.path.join("projects", args.project, "topics", args.topic)
     output_topic_path = os.path.join(

@@ -113,7 +113,9 @@ if __name__ == "__main__":
     args, pipeline_args = parser.parse_known_args()
 
     logging.basicConfig(level=getattr(logging, args.loglevel))
-    beam_options = PipelineOptions(pipeline_args, streaming=True, runner=args.runner, project=args.project)
+    beam_options = PipelineOptions(
+        pipeline_args, streaming=True, runner=args.runner, project=args.project
+    )
 
     input_topic_path = os.path.join(
         "projects", args.project, "topics", args.render_video_topic
