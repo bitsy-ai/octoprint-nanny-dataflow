@@ -90,7 +90,7 @@ class ExplodeWindowedHealthRecord(beam.DoFn):
 
         metadata = Metadata(
             client_version=element.client_version,
-            session=element.session,
+            print_session=element.print_session,
             user_id=element.user_id,
             device_id=element.octoprint_device_id,
             cloudiot_device_id=element.cloudiot_device_id,
@@ -101,7 +101,7 @@ class ExplodeWindowedHealthRecord(beam.DoFn):
             WindowedHealthRecord(
                 metadata=metadata,
                 ts=element.ts,
-                session=element.session,
+                print_session=element.print_session,
                 detection_score=element.detection_scores[i],
                 detection_class=element.detection_classes[i],
                 health_weight=CATEGORY_INDEX[element.detection_classes[i]][
@@ -207,7 +207,7 @@ class SortWindowedHealthDataframe(beam.DoFn):
         yield (
             key,
             NestedWindowedHealthTrend(
-                session=key,
+                print_session=key,
                 poly_coef=np.array(trend.coef),
                 poly_domain=np.array(trend.domain),
                 poly_roots=np.array(trend.roots()),
@@ -234,7 +234,7 @@ class CreateVideoRenderMessage(beam.DoFn):
 
     def process(
         self,
-        element=Tuple[Any, Iterable[NestedWindowedHealthTrend]],
+        element=Tuple[Any, Iterable[NestedTelemetryEvent]],
         window=beam.DoFn.WindowParam,
         pane_info=beam.DoFn.PaneInfoParam,
     ) -> Iterable[bytes]:

@@ -165,6 +165,12 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "--sliding-window-health-filtered-sink",
+        default="gs://print-nanny-sandbox/dataflow/telemetry_event/sliding_window/WindowedHealthRecord/filtered/parquet",
+        help="Unfiltered WindowedHealthRecord emitted from SlidingWindow",
+    )
+
+    parser.add_argument(
         "--session-window-health-trend-sink",
         default="gs://print-nanny-sandbox/dataflow/telemetry_event/session_window/NestedWindowedHealthTrend/parquet",
         help="Post-filtered WindowedHelathDataframe emitted from session window",
@@ -258,7 +264,7 @@ if __name__ == "__main__":
         parsed_dataset_by_session = (
             parsed_dataset
             | "Key NestedTelemetryEvent by session id"
-            >> beam.Map(lambda x: (x.session, x))
+            >> beam.Map(lambda x: (x.print_session, x))
         )
 
         fixed_window_view = (
@@ -311,11 +317,11 @@ if __name__ == "__main__":
             sliding_window_view
             | "Write SlidingWindow ExplodeWindowedHealthRecord Parquet (unfilterd)"
             >> beam.ParDo(ExplodeWindowedHealthRecord())
-            | "Group unfiltered health records by key" >> beam.GroupBy("session")
+            | "Group unfiltered health records by key" >> beam.GroupBy("print_session")
             | "Write SlidingWindow Parquet"
             >> beam.ParDo(
                 WriteWindowedParquet(
-                    args.sliding_window_health_raw_sink,
+                    args.sliding_window_health_filtered_sink,
                     WindowedHealthRecord.pyarrow_schema(),
                 )
             )
@@ -325,17 +331,25 @@ if __name__ == "__main__":
         # This is implemented as a Singleton instance in Java, which can be shared across threads and used as a cache
         # The Python implementation probably uses multiprocessing.shared_memory, which might actually be higher latency than hitting disk for most workloads?
 
-        windowed_health_dataframe = (
+        filtered_health_dataframe = (
             sliding_window_view
             | "Drop image data" >> beam.Map(lambda v: v.drop_image_data())
-            | "Group alert pipeline by session" >> beam.GroupBy("session")
+            | "Group alert pipeline by session" >> beam.GroupBy("print_session")
             | "Filter detections below threshold & outside area of interest"
             >> beam.ParDo(
                 FilterAreaOfInterest(args.calibration_base_path, score_threshold=0.5)
             )
             | beam.ParDo(ExplodeWindowedHealthRecord())
-            | beam.GroupBy("session")
-            | "Windowed health DataFrame" >> beam.ParDo(SortWindowedHealthDataframe())
+            | "Windowed health DataFrame" >> beam.GroupBy("print_session")
+            | beam.ParDo(SortWindowedHealthDataframe())
+            | "Write SlidingWindow (calibration & threshold filtered) Parquet"
+            >> beam.GroupBy("print_session")
+            | beam.ParDo(
+                WriteWindowedParquet(
+                    args.sliding_window_health_raw_sink,
+                    WindowedHealthRecord.pyarrow_schema(),
+                )
+            )
         )
 
         # TODO re-enable Afterwatermark triggers with MonitorHealthStateful
@@ -347,7 +361,8 @@ if __name__ == "__main__":
 
         # accumulates failure count
         session_accumulating_dataframe = (
-            windowed_health_dataframe
+            # windowed_health_dataframe
+            parsed_dataset_by_session
             | beam.WindowInto(
                 beam.transforms.window.Sessions(session_gap),
                 # TODO re-enable with MonitorHealthStateful

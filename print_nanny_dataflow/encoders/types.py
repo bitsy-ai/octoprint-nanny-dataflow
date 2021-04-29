@@ -38,7 +38,7 @@ class WindowType(Enum):
 
 class Metadata(NamedTuple):
     client_version: str
-    session: str
+    print_session: str
     user_id: int
     device_id: int
     cloudiot_device_id: int
@@ -94,7 +94,7 @@ class RenderVideoMessage(NamedTuple):
             pa.serialize(
                 dict(
                     metadata=metadata,
-                    session=self.session,
+                    print_session=self.session,
                     event_type=self.event_type.value,
                     gcs_input=self.gcs_input,
                     gcs_output=self.gcs_output,
@@ -149,7 +149,7 @@ class RenderVideoMessage(NamedTuple):
     @staticmethod
     def pyarrow_fields():
         return [
-            ("session", pa.string()),
+            ("print_session", pa.string()),
             ("metadata", Metadata.pyarrow_struct()),
             ("event_type", pa.int32()),
             ("filepattern", pa.string()),
@@ -195,7 +195,7 @@ class HealthTrend(NamedTuple):
 
 class WindowedHealthDataFrameRow(NamedTuple):
     ts: int
-    session: str
+    print_session: str
     health_score: npt.Float32
     health_weight: npt.Float32
     detection_class: npt.Int32
@@ -208,7 +208,7 @@ class WindowedHealthDataFrameRow(NamedTuple):
     def pyarrow_fields():
         return [
             ("ts", pa.int64()),
-            ("session", pa.string()),
+            ("print_session", pa.string()),
             ("health_score", pa.float32()),
             ("health_weight", pa.float32()),
             ("detection_class", pa.int32()),
@@ -225,7 +225,7 @@ class WindowedHealthDataFrameRow(NamedTuple):
 
 
 class NestedWindowedHealthTrend(NamedTuple):
-    session: str
+    print_session: str
     metadata: Metadata
     health_score: npt.NDArray[npt.Float32]
     health_weight: npt.NDArray[npt.Float32]
@@ -265,7 +265,7 @@ class NestedWindowedHealthTrend(NamedTuple):
     @staticmethod
     def pyarrow_fields():
         return [
-            ("session", pa.string()),
+            ("print_session", pa.string()),
             ("metadata", Metadata.pyarrow_struct()),
             ("health_score", pa.list_(pa.float32())),
             ("health_weight", pa.list_(pa.float32())),
@@ -290,7 +290,7 @@ class NestedWindowedHealthTrend(NamedTuple):
 class WindowedHealthRecord(NamedTuple):
 
     ts: int
-    session: str
+    print_session: str
     metadata: Metadata
     health_score: npt.Float32
     health_weight: npt.Float32
@@ -307,7 +307,7 @@ class WindowedHealthRecord(NamedTuple):
     def pyarrow_fields():
         return [
             ("ts", pa.int64()),
-            ("session", pa.string()),
+            ("print_session", pa.string()),
             ("metadata", Metadata.pyarrow_struct()),
             ("health_score", pa.float32()),
             ("health_weight", pa.float32()),
@@ -375,7 +375,7 @@ class DeviceCalibration(NamedTuple):
 
 class AnnotatedImage(NamedTuple):
     ts: int
-    session: str
+    print_session: str
     metadata: Metadata
     annotated_image_data: bytes
 
@@ -387,7 +387,7 @@ class NestedTelemetryEvent(NamedTuple):
 
     ts: int
     client_version: str
-    session: str
+    print_session: str
 
     user_id: int
     octoprint_device_id: int
@@ -415,7 +415,7 @@ class NestedTelemetryEvent(NamedTuple):
             [
                 ("ts", pa.int64()),
                 ("client_version", pa.string()),
-                ("session", pa.string()),
+                ("print_session", pa.string()),
                 ("user_id", pa.int32()),
                 ("boxes_xmax", pa.list_(pa.float32(), list_size=num_detections)),
                 ("boxes_xmin", pa.list_(pa.float32(), list_size=num_detections)),
@@ -450,7 +450,7 @@ class NestedTelemetryEvent(NamedTuple):
                 "image_height": tf.io.FixedLenFeature([], tf.int64),
                 "image_width": tf.io.FixedLenFeature([], tf.int64),
                 "num_detections": tf.io.FixedLenFeature([], tf.float32),
-                "session": tf.io.FixedLenFeature([], tf.string),
+                "print_session": tf.io.FixedLenFeature([], tf.string),
                 "ts": tf.io.FixedLenFeature([], tf.int64),
                 "user_id": tf.io.FixedLenFeature([], tf.int64),
             }
@@ -487,7 +487,7 @@ class NestedTelemetryEvent(NamedTuple):
         session = obj.Metadata().PrintSession().decode("utf-8")
         return cls(
             ts=obj.Metadata().Ts(),
-            session=session,
+            print_session=session,
             image_height=obj.Image().Height(),
             image_width=obj.Image().Width(),
             image_tensor=tf.expand_dims(tf.io.decode_jpeg(image_data), axis=0),
