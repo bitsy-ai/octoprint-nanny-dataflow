@@ -19,6 +19,7 @@ from print_nanny_dataflow.encoders.types import (
     NestedWindowedHealthTrend,
     CATEGORY_INDEX,
 )
+from print_nanny_client import AlertEventTypeEnum
 
 logger = logging.getLogger(__name__)
 
@@ -91,8 +92,8 @@ class ExplodeWindowedHealthRecord(beam.DoFn):
             client_version=element.client_version,
             session=element.session,
             user_id=element.user_id,
-            device_id=element.device_id,
-            device_cloudiot_id=element.device_cloudiot_id,
+            device_id=element.octoprint_device_id,
+            cloudiot_device_id=element.cloudiot_device_id,
             window_start=window_start,
             window_end=window_end,
         )
@@ -130,7 +131,7 @@ class FilterAreaOfInterest(beam.DoFn):
         self, element: NestedTelemetryEvent
     ) -> Optional[DeviceCalibration]:
         gcs_client = beam.io.gcp.gcsio.GcsIO()
-        device_id = element.device_id
+        device_id = element.octoprint_device_id
         device_calibration_path = os.path.join(
             self.calibration_base_path, str(device_id), self.calibration_filename
         )
@@ -257,7 +258,7 @@ class CreateVideoRenderMessage(beam.DoFn):
             msg = RenderVideoMessage(
                 print_session=key,
                 metadata=values[0].metadata,
-                event_type=AlertMessageType.SESSION_DONE,
+                event_type=AlertEventTypeEnum.VIDEODONE,
                 gcs_input=gcs_input,
                 gcs_output=gcs_output,
                 cdn_output=cdn_output,
@@ -266,18 +267,18 @@ class CreateVideoRenderMessage(beam.DoFn):
             ).to_bytes()
             yield msg
         # @TODO analyze production distribution and write alert behavior for session panes
-        else:
-            msg = RenderVideoMessage(
-                print_session=key,
-                metadata=values[0].metadata,
-                event_type=AlertMessageType.FAILURE,
-                gcs_input=gcs_input,
-                gcs_output=gcs_output,
-                cdn_output=cdn_output,
-                cdn_relative=cdn_relative,
-                bucket=self.bucket,
-            ).to_bytes()
-            yield msg
+        # else:
+        #     msg = RenderVideoMessage(
+        #         print_session=key,
+        #         metadata=values[0].metadata,
+        #         event_type=AlertMessageType.FAILURE,
+        #         gcs_input=gcs_input,
+        #         gcs_output=gcs_output,
+        #         cdn_output=cdn_output,
+        #         cdn_relative=cdn_relative,
+        #         bucket=self.bucket,
+        #     ).to_bytes()
+        #     yield msg
 
 
 class MonitorHealthStateful(beam.DoFn):

@@ -12,7 +12,7 @@ def partial_nested_telemetry_event_kwargs():
         session="12345",
         user_id=1,
         device_id=1,
-        device_cloudiot_id=1,
+        cloudiot_device_id=1,
         image_height=320,
         image_width=320,
         num_detections=1,

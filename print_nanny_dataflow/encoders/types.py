@@ -16,6 +16,7 @@ import pyarrow as pa
 
 from print_nanny_client import AlertEventTypeEnum
 from print_nanny_client.flatbuffers.alert import Alert, Metadata, AnnotatedVideo
+from print_nanny_client.flatbuffers.monitoring import MonitoringEvent
 
 from dataclasses import dataclass, asdict
 
@@ -40,7 +41,7 @@ class Metadata(NamedTuple):
     session: str
     user_id: int
     device_id: int
-    device_cloudiot_id: int
+    cloudiot_device_id: int
     window_start: int = None
     window_end: int = None
 
@@ -54,7 +55,7 @@ class Metadata(NamedTuple):
             ("session", pa.string()),
             ("user_id", pa.int32()),
             ("device_id", pa.int32()),
-            ("device_cloudiot_id", pa.int64()),
+            ("cloudiot_device_id", pa.int64()),
             ("window_start", pa.int64()),
             ("window_end", pa.int64()),
         ]
@@ -463,7 +464,7 @@ class NestedTelemetryEvent(NamedTuple):
     @classmethod
     def from_flatbuffer(cls, input_bytes):
 
-        obj = MonitoringEvent.MonitoringEvent.GetRootAsTelemetryEvent(input_bytes, 0)
+        obj = MonitoringEvent.MonitoringEvent.GetRootAsMonitoringEvent(input_bytes, 0)
 
         scores = []
         num_detections = []
@@ -482,7 +483,7 @@ class NestedTelemetryEvent(NamedTuple):
                 for b in obj.BoundingBoxes()
             ]
 
-        image_data = obj.Image().Data().tobytes()
+        image_data = obj.Image().DataAsNumpy().tobytes()
         session = obj.Metadata().PrintSession().decode("utf-8")
         return cls(
             ts=obj.Metadata().Ts(),
@@ -500,7 +501,7 @@ class NestedTelemetryEvent(NamedTuple):
             boxes_xmax=boxes_xmax,
             user_id=obj.Metadata().UserId(),
             octoprint_device_id=obj.Metadata().OctoprintDeviceId(),
-            cloudiot_device_id=obj.Metadata().CloudIotDeviceId(),
+            cloudiot_device_id=obj.Metadata().CloudiotDeviceId(),
             client_version=obj.Metadata().ClientVersion().decode("utf-8"),
         )
 

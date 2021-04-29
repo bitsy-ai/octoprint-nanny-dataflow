@@ -106,5 +106,5 @@ if __name__ == "__main__":
             | "Decode bytes" >> beam.Map(lambda b: RenderVideoMessage.from_bytes(b))
             | "Run render_video.sh" >> beam.ParDo(RenderVideo())
             | "Convert to Flatbuffer msg" >> beam.Map(lambda e: e.to_flatbuffer())
-            | "Write to PubSub" >> beam.ParDo(output_topic_path)
+            | "Write to PubSub" >> beam.io.WriteToPubSub(output_topic_path)
         )
