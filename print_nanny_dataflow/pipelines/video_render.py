@@ -75,11 +75,11 @@ class RenderVideo(beam.DoFn):
             [
                 script,
                 "-i",
-                msg.gcs_prefix_in,
+                msg.gcs_input,
                 "-s",
                 msg.session,
                 "-o",
-                msg.gcs_prefix_out,
+                msg.gcs_output,
                 "-c",
                 msg.full_cdn_path(),
             ]

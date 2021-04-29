@@ -75,8 +75,8 @@ class RenderVideoMessage(NamedTuple):
     session: str
     metadata: Metadata
     alert_type: AlertMessageType
-    gcs_prefix_in: str
-    gcs_prefix_out: str
+    gcs_input: str
+    gcs_output: str
     cdn_output_path: str
     cdn_relative_path: str
     bucket: str
@@ -95,8 +95,8 @@ class RenderVideoMessage(NamedTuple):
                     metadata=metadata,
                     session=self.session,
                     alert_type=self.alert_type.value,
-                    gcs_prefix_in=self.gcs_prefix_in,
-                    gcs_prefix_out=self.gcs_prefix_out,
+                    gcs_input=self.gcs_input,
+                    gcs_output=self.gcs_output,
                     cdn_output_path=self.cdn_output_path,
                     cdn_relative_path=self.cdn_relative_path,
                     bucket=self.bucket,

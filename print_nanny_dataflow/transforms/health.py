@@ -241,8 +241,8 @@ class CreateVideoRenderMessage(beam.DoFn):
         key, values = element
         datestamp = datetime.now().strftime("%Y/%m/%d")
 
-        gcs_prefix_in = os.path.join(self.in_base_path, key)
-        gcs_prefix_out = os.path.join(self.out_base_path, key, "annotated_video.mp4")
+        gcs_input = os.path.join(self.in_base_path, key)
+        gcs_output = os.path.join(self.out_base_path, key, "annotated_video.mp4")
 
         suffix = os.path.join(
             key,
@@ -259,8 +259,8 @@ class CreateVideoRenderMessage(beam.DoFn):
                 session=key,
                 metadata=values[0].metadata,
                 alert_type=AlertMessageType.SESSION_DONE,
-                gcs_prefix_in=gcs_prefix_in,
-                gcs_prefix_out=gcs_prefix_out,
+                gcs_input=gcs_input,
+                gcs_output=gcs_output,
                 cdn_output_path=cdn_output_path,
                 cdn_relative_path=cdn_relative_path,
                 bucket=self.bucket,
@@ -272,8 +272,8 @@ class CreateVideoRenderMessage(beam.DoFn):
                 session=key,
                 metadata=values[0].metadata,
                 alert_type=AlertMessageType.FAILURE,
-                gcs_prefix_in=gcs_prefix_in,
-                gcs_prefix_out=gcs_prefix_out,
+                gcs_input=gcs_input,
+                gcs_output=gcs_output,
                 cdn_output_path=cdn_output_path,
                 cdn_relative_path=cdn_relative_path,
                 bucket=self.bucket,
