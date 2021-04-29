@@ -22,51 +22,6 @@ import print_nanny_client.flatbuffers
 logger = logging.getLogger(__name__)
 
 
-class FileSpec(NamedTuple):
-    session: str
-    gcs_prefix: str
-    gcs_outfile: str
-
-
-class CreateAlert(beam.DoFn):
-    def process(self, msg: RenderVideoMessage) -> bytes:
-        builder = flatbuffers.Builder(1024)
-
-
-class TriggerAlert(beam.DoFn):
-    def __init__(
-        self,
-        api_url,
-        api_token,
-    ):
-        self.api_url = api_url
-        self.api_token = api_token
-
-    async def trigger_alert_async(self, session: str, filepath: str):
-        rest_client = RestAPIClient(api_token=self.api_token, api_url=self.api_url)
-
-        res = await rest_client.create_print_session_alert(
-            print_session=session, annotated_video=filepath
-        )
-
-        logger.info(f"create_print_session_alert res={res}")
-
-    def trigger_alert(self, session: str, filepath):
-        logger.warning(f"Sending alert for session={session}")
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        return loop.run_until_complete(self.trigger_alert_async(session, filepath))
-
-    def process(self, msg: RenderVideoMessage):
-        try:
-            yield self.trigger_alert(msg.session, msg.cdn_relative_path)
-        except print_nanny_client.exceptions.ApiException as e:
-            logger.error(e)
-
-
 class RenderVideo(beam.DoFn):
     def process(self, msg: RenderVideoMessage) -> Iterable[RenderVideoMessage]:
         path = os.path.dirname(print_nanny_dataflow.__file__)
@@ -150,7 +105,6 @@ if __name__ == "__main__":
             )
             | "Decode bytes" >> beam.Map(lambda b: RenderVideoMessage.from_bytes(b))
             | "Run render_video.sh" >> beam.ParDo(RenderVideo())
-            # | "Trigger alert" >> beam.ParDo(TriggerAlert(args.api_url, args.api_token))
-            | "Create Alert message" >> beam.ParDo(CreateAlert())
+            | "Convert to Flatbuffer msg" >> beam.Map(lambda e: e.to_flatbuffer())
             | "Write to PubSub" >> beam.ParDo(output_topic_path)
         )

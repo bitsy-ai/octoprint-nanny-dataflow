@@ -18,7 +18,6 @@ from print_nanny_dataflow.encoders.types import (
     Metadata,
     NestedWindowedHealthTrend,
     CATEGORY_INDEX,
-    AlertMessageType,
 )
 
 logger = logging.getLogger(__name__)
@@ -249,33 +248,33 @@ class CreateVideoRenderMessage(beam.DoFn):
             datestamp,
             "annotated_video.mp4",
         )
-        cdn_output_path = os.path.join(self.cdn_base_path, self.cdn_upload_path, suffix)
+        cdn_output = os.path.join(self.cdn_base_path, self.cdn_upload_path, suffix)
 
-        cdn_relative_path = os.path.join(self.cdn_upload_path, suffix)
+        cdn_relative = os.path.join(self.cdn_upload_path, suffix)
 
         # publish video rendering message
         if pane_info.is_last:
             msg = RenderVideoMessage(
-                session=key,
+                print_session=key,
                 metadata=values[0].metadata,
-                alert_type=AlertMessageType.SESSION_DONE,
+                event_type=AlertMessageType.SESSION_DONE,
                 gcs_input=gcs_input,
                 gcs_output=gcs_output,
-                cdn_output_path=cdn_output_path,
-                cdn_relative_path=cdn_relative_path,
+                cdn_output=cdn_output,
+                cdn_relative=cdn_relative,
                 bucket=self.bucket,
             ).to_bytes()
             yield msg
         # @TODO analyze production distribution and write alert behavior for session panes
         else:
             msg = RenderVideoMessage(
-                session=key,
+                print_session=key,
                 metadata=values[0].metadata,
-                alert_type=AlertMessageType.FAILURE,
+                event_type=AlertMessageType.FAILURE,
                 gcs_input=gcs_input,
                 gcs_output=gcs_output,
-                cdn_output_path=cdn_output_path,
-                cdn_relative_path=cdn_relative_path,
+                cdn_output=cdn_output,
+                cdn_relative=cdn_relative,
                 bucket=self.bucket,
             ).to_bytes()
             yield msg
