@@ -77,12 +77,12 @@ class RenderVideoMessage(NamedTuple):
     alert_type: AlertMessageType
     gcs_prefix_in: str
     gcs_prefix_out: str
-    cdn_prefix_out: str
-    cdn_suffix: str
+    cdn_output_path: str
+    cdn_relative_path: str
     bucket: str
 
     def full_cdn_path(self):
-        return os.path.join("gs://", self.bucket, self.cdn_prefix_out)
+        return os.path.join("gs://", self.bucket, self.cdn_output_path)
 
     def to_dict(self) -> Dict[str, Any]:
         return self._asdict()
@@ -97,8 +97,8 @@ class RenderVideoMessage(NamedTuple):
                     alert_type=self.alert_type.value,
                     gcs_prefix_in=self.gcs_prefix_in,
                     gcs_prefix_out=self.gcs_prefix_out,
-                    cdn_prefix_out=self.cdn_prefix_out,
-                    cdn_suffix=self.cdn_suffix,
+                    cdn_output_path=self.cdn_output_path,
+                    cdn_relative_path=self.cdn_relative_path,
                     bucket=self.bucket,
                 )
             )

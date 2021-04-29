@@ -249,9 +249,9 @@ class CreateVideoRenderMessage(beam.DoFn):
             datestamp,
             "annotated_video.mp4",
         )
-        cdn_prefix_out = os.path.join(self.cdn_base_path, self.cdn_upload_path, suffix)
+        cdn_output_path = os.path.join(self.cdn_base_path, self.cdn_upload_path, suffix)
 
-        cdn_suffix = os.path.join(self.cdn_upload_path, suffix)
+        cdn_relative_path = os.path.join(self.cdn_upload_path, suffix)
 
         # publish video rendering message
         if pane_info.is_last:
@@ -261,8 +261,8 @@ class CreateVideoRenderMessage(beam.DoFn):
                 alert_type=AlertMessageType.SESSION_DONE,
                 gcs_prefix_in=gcs_prefix_in,
                 gcs_prefix_out=gcs_prefix_out,
-                cdn_prefix_out=cdn_prefix_out,
-                cdn_suffix=cdn_suffix,
+                cdn_output_path=cdn_output_path,
+                cdn_relative_path=cdn_relative_path,
                 bucket=self.bucket,
             ).to_bytes()
             yield msg
@@ -274,8 +274,8 @@ class CreateVideoRenderMessage(beam.DoFn):
                 alert_type=AlertMessageType.FAILURE,
                 gcs_prefix_in=gcs_prefix_in,
                 gcs_prefix_out=gcs_prefix_out,
-                cdn_prefix_out=cdn_prefix_out,
-                cdn_suffix=cdn_suffix,
+                cdn_output_path=cdn_output_path,
+                cdn_relative_path=cdn_relative_path,
                 bucket=self.bucket,
             ).to_bytes()
             yield msg

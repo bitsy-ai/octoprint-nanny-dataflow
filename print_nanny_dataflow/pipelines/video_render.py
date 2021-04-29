@@ -1,7 +1,6 @@
 import logging
 import argparse
 import os
-import asyncio
 from typing import (
     Tuple,
     Any,
@@ -18,7 +17,7 @@ from print_nanny_dataflow.encoders.types import (
 from apache_beam.transforms.trigger import AfterCount, AfterWatermark, AfterAny
 import print_nanny_dataflow
 from print_nanny_dataflow.clients.rest import RestAPIClient
-import print_nanny_client
+import print_nanny_client.flatbuffers
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +26,11 @@ class FileSpec(NamedTuple):
     session: str
     gcs_prefix: str
     gcs_outfile: str
+
+
+class CreateAlert(beam.DoFn):
+    def process(self, msg: RenderVideoMessage) -> bytes:
+        builder = flatbuffers.Builder(1024)
 
 
 class TriggerAlert(beam.DoFn):
@@ -58,7 +62,7 @@ class TriggerAlert(beam.DoFn):
 
     def process(self, msg: RenderVideoMessage):
         try:
-            yield self.trigger_alert(msg.session, msg.cdn_suffix)
+            yield self.trigger_alert(msg.session, msg.cdn_relative_path)
         except print_nanny_client.exceptions.ApiException as e:
             logger.error(e)
 
@@ -90,9 +94,14 @@ if __name__ == "__main__":
     )
     parser.add_argument("--loglevel", default="INFO")
     parser.add_argument(
-        "--render-video-topic",
+        "--input-topic",
         default="monitoring-video-render",
-        help="Video rendering jobs will be output to this PubSub topic",
+        help="Video rendering jobs published to this PubSub topic",
+    )
+    parser.add_argument(
+        "--output-topic",
+        default="alerts",
+        help="Alert push jobs published to this PubSub topic",
     )
 
     parser.add_argument("--project", default="print-nanny-sandbox")
@@ -118,7 +127,11 @@ if __name__ == "__main__":
     )
 
     input_topic_path = os.path.join(
-        "projects", args.project, "topics", args.render_video_topic
+        "projects", args.project, "topics", args.input_topic
+    )
+
+    output_topic_path = os.path.join(
+        "projects", args.project, "topics", args.output_topic
     )
 
     with beam.Pipeline(options=beam_options) as p:
@@ -137,6 +150,7 @@ if __name__ == "__main__":
             )
             | "Decode bytes" >> beam.Map(lambda b: RenderVideoMessage.from_bytes(b))
             | "Run render_video.sh" >> beam.ParDo(RenderVideo())
-            | "Trigger alert" >> beam.ParDo(TriggerAlert(args.api_url, args.api_token))
-            | beam.Map(print)
+            # | "Trigger alert" >> beam.ParDo(TriggerAlert(args.api_url, args.api_token))
+            | "Create Alert message" >> beam.ParDo(CreateAlert())
+            | "Write to PubSub" >> beam.ParDo(output_topic_path)
         )
