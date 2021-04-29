@@ -343,11 +343,11 @@ if __name__ == "__main__":
             | "Windowed health DataFrame" >> beam.GroupBy("print_session")
             | beam.ParDo(SortWindowedHealthDataframe())
             | "Write SlidingWindow (calibration & threshold filtered) Parquet"
-            >> beam.GroupBy("print_session")
+            >> beam.GroupByKey()
             | beam.ParDo(
                 WriteWindowedParquet(
                     args.sliding_window_health_raw_sink,
-                    WindowedHealthRecord.pyarrow_schema(),
+                    NestedWindowedHealthTrend.pyarrow_schema(),
                 )
             )
         )
