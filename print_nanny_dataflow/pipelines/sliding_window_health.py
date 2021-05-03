@@ -367,7 +367,6 @@ if __name__ == "__main__":
         session_accumulating_dataframe = (
             # windowed_health_dataframe
             parsed_dataset_by_session
-            | "Group parsed dataset by key" >> beam.GroupByKey()
             # filtered_health_dataframe
             | beam.WindowInto(
                 beam.transforms.window.Sessions(session_gap),
@@ -381,8 +380,8 @@ if __name__ == "__main__":
 
         on_session_end = (
             session_accumulating_dataframe
-            | "Should alert for session?"
-            >> beam.ParDo(
+            | "Should alert for session?" >> beam.GroupByKey()
+            | beam.ParDo(
                 CreateVideoRenderMessage(
                     args.fixed_window_jpg_sink,
                     args.fixed_window_mp4_sink,

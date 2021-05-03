@@ -253,20 +253,26 @@ class CreateVideoRenderMessage(beam.DoFn):
 
         cdn_relative = os.path.join(self.cdn_upload_path, suffix)
 
+        metadata = Metadata(
+            client_version=values[0].client_version,
+            print_session=values[0].print_session,
+            user_id=values[0].user_id,
+            octoprint_device_id=values[0].octoprint_device_id,
+            cloudiot_device_id=values[0].cloudiot_device_id,
+        )
         # publish video rendering message
-        logger.info(f"pane_info.is_last={pane_info.is_last}")
-        if pane_info.is_last:
-            msg = RenderVideoMessage(
-                print_session=key,
-                metadata=values[0].metadata,
-                event_type=AlertEventTypeEnum.video_done,
-                gcs_input=gcs_input,
-                gcs_output=gcs_output,
-                cdn_output=cdn_output,
-                cdn_relative=cdn_relative,
-                bucket=self.bucket,
-            ).to_bytes()
-            yield msg
+        logger.info(f"pane_info.is_last={pane_info.is_last} pane_info={pane_info}")
+        msg = RenderVideoMessage(
+            print_session=key,
+            metadata=metadata,
+            event_type=AlertEventTypeEnum.video_done,
+            gcs_input=gcs_input,
+            gcs_output=gcs_output,
+            cdn_output=cdn_output,
+            cdn_relative=cdn_relative,
+            bucket=self.bucket,
+        ).to_bytes()
+        yield msg
         # @TODO analyze production distribution and write alert behavior for session panes
         # else:
         #     msg = RenderVideoMessage(

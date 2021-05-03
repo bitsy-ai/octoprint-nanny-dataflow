@@ -112,7 +112,7 @@ class RenderVideoMessage(NamedTuple):
 
     def to_flatbuffer(self) -> bytearray:
         builder = flatbuffers.Builder(1024)
-        client_version = builder.CreateString(print_nanny_client.__version__)
+        client_version = builder.CreateString(self.metadata.client_version)
         print_session = builder.CreateString(self.metadata.print_session)
 
         MetadataFB.MetadataStart(builder)
