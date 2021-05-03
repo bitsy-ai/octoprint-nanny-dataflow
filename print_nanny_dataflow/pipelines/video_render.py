@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 class RenderVideo(beam.DoFn):
-    def process(self, msg: RenderVideoMessage) -> Iterable[RenderVideoMessage]:
+    def process(self, msg: RenderVideoMessage) -> Iterable[bytes]:
         path = os.path.dirname(print_nanny_dataflow.__file__)
         script = os.path.join(path, "scripts", "render_video.sh")
         val = subprocess.check_call(
@@ -40,7 +40,7 @@ class RenderVideo(beam.DoFn):
             ]
         )
         logger.info(val)
-        yield msg
+        yield bytes(msg.to_flatbuffer())
 
 
 if __name__ == "__main__":
@@ -105,6 +105,5 @@ if __name__ == "__main__":
             )
             | "Decode bytes" >> beam.Map(lambda b: RenderVideoMessage.from_bytes(b))
             | "Run render_video.sh" >> beam.ParDo(RenderVideo())
-            | "Convert to Flatbuffer msg" >> beam.Map(lambda e: e.to_flatbuffer())
             | "Write to PubSub" >> beam.io.WriteToPubSub(output_topic_path)
         )

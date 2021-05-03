@@ -19,7 +19,7 @@ from print_nanny_dataflow.encoders.types import (
     NestedWindowedHealthTrend,
     CATEGORY_INDEX,
 )
-from print_nanny_client import AlertEventTypeEnum
+from print_nanny_client.flatbuffers.alert.AlertEventTypeEnum import AlertEventTypeEnum
 
 logger = logging.getLogger(__name__)
 
@@ -259,7 +259,7 @@ class CreateVideoRenderMessage(beam.DoFn):
             msg = RenderVideoMessage(
                 print_session=key,
                 metadata=values[0].metadata,
-                event_type=AlertEventTypeEnum.VIDEODONE,
+                event_type=AlertEventTypeEnum.video_done,
                 gcs_input=gcs_input,
                 gcs_output=gcs_output,
                 cdn_output=cdn_output,

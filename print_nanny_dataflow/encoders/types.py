@@ -19,8 +19,8 @@ import print_nanny_client
 from print_nanny_client.flatbuffers.alert import (
     Alert,
     AnnotatedVideo,
-    AlertEventTypeEnum,
 )
+from print_nanny_client.flatbuffers.alert.AlertEventTypeEnum import AlertEventTypeEnum
 from print_nanny_client.flatbuffers.alert import Metadata as MetadataFB
 from print_nanny_client.flatbuffers.monitoring import MonitoringEvent
 
@@ -110,7 +110,7 @@ class RenderVideoMessage(NamedTuple):
             .to_pybytes()
         )
 
-    def to_flatbuffer(self) -> bytes:
+    def to_flatbuffer(self) -> bytearray:
         builder = flatbuffers.Builder(1024)
         client_version = builder.CreateString(print_nanny_client.__version__)
         print_session = builder.CreateString(self.metadata.print_session)
