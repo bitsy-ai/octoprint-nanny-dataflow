@@ -92,7 +92,7 @@ class ExplodeWindowedHealthRecord(beam.DoFn):
             client_version=element.client_version,
             print_session=element.print_session,
             user_id=element.user_id,
-            device_id=element.octoprint_device_id,
+            octoprint_device_id=element.octoprint_device_id,
             cloudiot_device_id=element.cloudiot_device_id,
             window_start=window_start,
             window_end=window_end,
@@ -254,6 +254,7 @@ class CreateVideoRenderMessage(beam.DoFn):
         cdn_relative = os.path.join(self.cdn_upload_path, suffix)
 
         # publish video rendering message
+        logger.info(f"pane_info.is_last={pane_info.is_last}")
         if pane_info.is_last:
             msg = RenderVideoMessage(
                 print_session=key,

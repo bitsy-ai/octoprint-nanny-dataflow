@@ -7,6 +7,7 @@ import numpy as np
 import nptyping as npt
 import tensorflow as tf
 import os
+import flatbuffers
 from tensorflow_transform.tf_metadata import schema_utils
 from tensorflow_transform.tf_metadata import dataset_metadata
 from tensorflow_metadata.proto.v0 import schema_pb2
@@ -14,8 +15,13 @@ from tensorflow_metadata.proto.v0 import schema_pb2
 from apache_beam.pvalue import PCollection
 import pyarrow as pa
 
-from print_nanny_client import AlertEventTypeEnum
-from print_nanny_client.flatbuffers.alert import Alert, Metadata, AnnotatedVideo
+import print_nanny_client
+from print_nanny_client.flatbuffers.alert import (
+    Alert,
+    AnnotatedVideo,
+    AlertEventTypeEnum,
+)
+from print_nanny_client.flatbuffers.alert import Metadata as MetadataFB
 from print_nanny_client.flatbuffers.monitoring import MonitoringEvent
 
 from dataclasses import dataclass, asdict
@@ -40,7 +46,7 @@ class Metadata(NamedTuple):
     client_version: str
     print_session: str
     user_id: int
-    device_id: int
+    octoprint_device_id: int
     cloudiot_device_id: int
     window_start: int = None
     window_end: int = None
@@ -70,17 +76,14 @@ class Metadata(NamedTuple):
 
 
 class RenderVideoMessage(NamedTuple):
-    print_session: str
     metadata: Metadata
-    event_type: AlertEventTypeEnum.VIDEODONE
+    print_session: str
+    event_type: AlertEventTypeEnum.video_done
     gcs_input: str
     gcs_output: str
     cdn_output: str
     cdn_relative: str
     bucket: str
-    octoprint_device_id: int
-    cloudiot_device_id: int
-    user_id: int
 
     def full_cdn_path(self):
         return os.path.join("gs://", self.bucket, self.cdn_output)
@@ -94,8 +97,8 @@ class RenderVideoMessage(NamedTuple):
             pa.serialize(
                 dict(
                     metadata=metadata,
-                    print_session=self.session,
-                    event_type=self.event_type.value,
+                    print_session=self.print_session,
+                    event_type=self.event_type,
                     gcs_input=self.gcs_input,
                     gcs_output=self.gcs_output,
                     cdn_output=self.cdn_output,
@@ -110,15 +113,19 @@ class RenderVideoMessage(NamedTuple):
     def to_flatbuffer(self) -> bytes:
         builder = flatbuffers.Builder(1024)
         client_version = builder.CreateString(print_nanny_client.__version__)
-        print_session = builder.CreateString(self.print_session)
+        print_session = builder.CreateString(self.metadata.print_session)
 
-        Metadata.MetadataStart(builder)
-        Metadata.MetadataAddUserId(builder, self.user_id)
-        Metadata.MetadataAddCloudiotDeviceId(builder, self.cloudiot_device_id)
-        Metadata.MetadataAddOctoprintDeviceId(builder, self.octoprint_device_id)
-        Metadata.MetadataAddClientVersion(builder, client_version)
-        Metadata.MetadataAddPrintSession(builder, print_session)
-        metadata = Metadata.MetadataEnd(builder)
+        MetadataFB.MetadataStart(builder)
+        MetadataFB.MetadataAddUserId(builder, self.metadata.user_id)
+        MetadataFB.MetadataAddCloudiotDeviceId(
+            builder, self.metadata.cloudiot_device_id
+        )
+        MetadataFB.MetadataAddOctoprintDeviceId(
+            builder, self.metadata.octoprint_device_id
+        )
+        MetadataFB.MetadataAddClientVersion(builder, client_version)
+        MetadataFB.MetadataAddPrintSession(builder, print_session)
+        metadata = MetadataFB.MetadataEnd(builder)
 
         gcs_input = builder.CreateString(self.gcs_input)
         gcs_output = builder.CreateString(self.gcs_output)

@@ -32,7 +32,7 @@ class RenderVideo(beam.DoFn):
                 "-i",
                 msg.gcs_input,
                 "-s",
-                msg.session,
+                msg.print_session,
                 "-o",
                 msg.gcs_output,
                 "-c",

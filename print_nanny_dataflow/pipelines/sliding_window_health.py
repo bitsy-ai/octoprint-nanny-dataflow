@@ -342,9 +342,13 @@ if __name__ == "__main__":
             | beam.ParDo(ExplodeWindowedHealthRecord())
             | "Windowed health DataFrame" >> beam.GroupBy("print_session")
             | beam.ParDo(SortWindowedHealthDataframe())
+            | beam.GroupByKey()
+        )
+
+        _ = (
+            filtered_health_dataframe
             | "Write SlidingWindow (calibration & threshold filtered) Parquet"
-            >> beam.GroupByKey()
-            | beam.ParDo(
+            >> beam.ParDo(
                 WriteWindowedParquet(
                     args.sliding_window_health_raw_sink,
                     NestedWindowedHealthTrend.pyarrow_schema(),
@@ -356,20 +360,19 @@ if __name__ == "__main__":
         # alert_pipeline_trigger = AfterWatermark(
         #     early=AfterProcessingTime(args.health_window_period), late=AfterCount(1)
         # )
-        session_gap = args.health_window_period * 2
+        session_gap = args.health_window_period * 3
         logging.info(f"Accumulating events with session gap={session_gap}")
 
         # accumulates failure count
         session_accumulating_dataframe = (
             # windowed_health_dataframe
-            parsed_dataset_by_session
+            filtered_health_dataframe
             | beam.WindowInto(
                 beam.transforms.window.Sessions(session_gap),
                 # TODO re-enable with MonitorHealthStateful
                 # trigger=alert_pipeline_trigger,
                 accumulation_mode=beam.transforms.trigger.AccumulationMode.DISCARDING,
             )
-            | beam.GroupByKey()
             # | "Stateful health score threshold monitor"
             # >> beam.ParDo(MonitorHealthStateful(output_topic_path))FW
         )
@@ -388,14 +391,3 @@ if __name__ == "__main__":
             )
             | "Write to PubSub" >> beam.io.WriteToPubSub(output_topic_path)
         )
-
-        # _ = (
-        #     session_accumulating_dataframe
-        #     | "Write session windows to Parquet"
-        #     >> beam.ParDo(
-        #         WriteWindowedParquet(
-        #             args.session_window_health_trend_sink,
-        #             NestedWindowedHealthTrend.pyarrow_schema(),
-        #         )
-        #     )
-        # )
