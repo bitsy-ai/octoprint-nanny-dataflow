@@ -80,11 +80,13 @@ class WriteAnnotatedImage(beam.DoFn):
         element: NestedTelemetryEvent,
         window=beam.DoFn.WindowParam,
     ) -> Iterable[Tuple[str, str]]:
-        outpath = os.path.join(self.base_path, element.session, f"{element.ts}.jpg")
+        outpath = os.path.join(
+            self.base_path, element.print_session, f"{element.ts}.jpg"
+        )
         img = self.annotate_image(element)
         gcs_client = beam.io.gcp.gcsio.GcsIO()
 
         with gcs_client.open(outpath, "wb") as f:
             f.write(img)
 
-        yield element.session, outpath
+        yield element.print_session, outpath

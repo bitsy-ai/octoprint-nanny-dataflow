@@ -18,8 +18,8 @@ from print_nanny_dataflow.encoders.types import (
     Metadata,
     NestedWindowedHealthTrend,
     CATEGORY_INDEX,
-    AlertMessageType,
 )
+from print_nanny_client.flatbuffers.alert.AlertEventTypeEnum import AlertEventTypeEnum
 
 logger = logging.getLogger(__name__)
 
@@ -90,10 +90,10 @@ class ExplodeWindowedHealthRecord(beam.DoFn):
 
         metadata = Metadata(
             client_version=element.client_version,
-            session=element.session,
+            print_session=element.print_session,
             user_id=element.user_id,
-            device_id=element.device_id,
-            device_cloudiot_id=element.device_cloudiot_id,
+            octoprint_device_id=element.octoprint_device_id,
+            cloudiot_device_id=element.cloudiot_device_id,
             window_start=window_start,
             window_end=window_end,
         )
@@ -101,7 +101,7 @@ class ExplodeWindowedHealthRecord(beam.DoFn):
             WindowedHealthRecord(
                 metadata=metadata,
                 ts=element.ts,
-                session=element.session,
+                print_session=element.print_session,
                 detection_score=element.detection_scores[i],
                 detection_class=element.detection_classes[i],
                 health_weight=CATEGORY_INDEX[element.detection_classes[i]][
@@ -131,7 +131,7 @@ class FilterAreaOfInterest(beam.DoFn):
         self, element: NestedTelemetryEvent
     ) -> Optional[DeviceCalibration]:
         gcs_client = beam.io.gcp.gcsio.GcsIO()
-        device_id = element.device_id
+        device_id = element.octoprint_device_id
         device_calibration_path = os.path.join(
             self.calibration_base_path, str(device_id), self.calibration_filename
         )
@@ -207,7 +207,7 @@ class SortWindowedHealthDataframe(beam.DoFn):
         yield (
             key,
             NestedWindowedHealthTrend(
-                session=key,
+                print_session=key,
                 poly_coef=np.array(trend.coef),
                 poly_domain=np.array(trend.domain),
                 poly_roots=np.array(trend.roots()),
@@ -234,51 +234,58 @@ class CreateVideoRenderMessage(beam.DoFn):
 
     def process(
         self,
-        element=Tuple[Any, Iterable[NestedWindowedHealthTrend]],
+        element=Tuple[Any, Iterable[NestedTelemetryEvent]],
         window=beam.DoFn.WindowParam,
         pane_info=beam.DoFn.PaneInfoParam,
     ) -> Iterable[bytes]:
         key, values = element
         datestamp = datetime.now().strftime("%Y/%m/%d")
 
-        gcs_prefix_in = os.path.join(self.in_base_path, key)
-        gcs_prefix_out = os.path.join(self.out_base_path, key, "annotated_video.mp4")
+        gcs_input = os.path.join(self.in_base_path, key)
+        gcs_output = os.path.join(self.out_base_path, key, "annotated_video.mp4")
 
         suffix = os.path.join(
             key,
             datestamp,
             "annotated_video.mp4",
         )
-        cdn_prefix_out = os.path.join(self.cdn_base_path, self.cdn_upload_path, suffix)
+        cdn_output = os.path.join(self.cdn_base_path, self.cdn_upload_path, suffix)
 
-        cdn_suffix = os.path.join(self.cdn_upload_path, suffix)
+        cdn_relative = os.path.join(self.cdn_upload_path, suffix)
 
+        metadata = Metadata(
+            client_version=values[0].client_version,
+            print_session=values[0].print_session,
+            user_id=values[0].user_id,
+            octoprint_device_id=values[0].octoprint_device_id,
+            cloudiot_device_id=values[0].cloudiot_device_id,
+        )
         # publish video rendering message
-        if pane_info.is_last:
-            msg = RenderVideoMessage(
-                session=key,
-                metadata=values[0].metadata,
-                alert_type=AlertMessageType.SESSION_DONE,
-                gcs_prefix_in=gcs_prefix_in,
-                gcs_prefix_out=gcs_prefix_out,
-                cdn_prefix_out=cdn_prefix_out,
-                cdn_suffix=cdn_suffix,
-                bucket=self.bucket,
-            ).to_bytes()
-            yield msg
+        logger.info(f"pane_info.is_last={pane_info.is_last} pane_info={pane_info}")
+        msg = RenderVideoMessage(
+            print_session=key,
+            metadata=metadata,
+            event_type=AlertEventTypeEnum.video_done,
+            gcs_input=gcs_input,
+            gcs_output=gcs_output,
+            cdn_output=cdn_output,
+            cdn_relative=cdn_relative,
+            bucket=self.bucket,
+        ).to_bytes()
+        yield msg
         # @TODO analyze production distribution and write alert behavior for session panes
-        else:
-            msg = RenderVideoMessage(
-                session=key,
-                metadata=values[0].metadata,
-                alert_type=AlertMessageType.FAILURE,
-                gcs_prefix_in=gcs_prefix_in,
-                gcs_prefix_out=gcs_prefix_out,
-                cdn_prefix_out=cdn_prefix_out,
-                cdn_suffix=cdn_suffix,
-                bucket=self.bucket,
-            ).to_bytes()
-            yield msg
+        # else:
+        #     msg = RenderVideoMessage(
+        #         print_session=key,
+        #         metadata=values[0].metadata,
+        #         event_type=AlertMessageType.FAILURE,
+        #         gcs_input=gcs_input,
+        #         gcs_output=gcs_output,
+        #         cdn_output=cdn_output,
+        #         cdn_relative=cdn_relative,
+        #         bucket=self.bucket,
+        #     ).to_bytes()
+        #     yield msg
 
 
 class MonitorHealthStateful(beam.DoFn):

@@ -7,13 +7,22 @@ import numpy as np
 import nptyping as npt
 import tensorflow as tf
 import os
+import flatbuffers
 from tensorflow_transform.tf_metadata import schema_utils
 from tensorflow_transform.tf_metadata import dataset_metadata
 from tensorflow_metadata.proto.v0 import schema_pb2
 
 from apache_beam.pvalue import PCollection
 import pyarrow as pa
-from print_nanny_client.telemetry_event import TelemetryEvent
+
+import print_nanny_client
+from print_nanny_client.flatbuffers.alert import (
+    Alert,
+    AnnotatedVideo,
+)
+from print_nanny_client.flatbuffers.alert.AlertEventTypeEnum import AlertEventTypeEnum
+from print_nanny_client.flatbuffers.alert import Metadata as MetadataFB
+from print_nanny_client.flatbuffers.monitoring import MonitoringEvent
 
 from dataclasses import dataclass, asdict
 
@@ -35,10 +44,10 @@ class WindowType(Enum):
 
 class Metadata(NamedTuple):
     client_version: str
-    session: str
+    print_session: str
     user_id: int
-    device_id: int
-    device_cloudiot_id: int
+    octoprint_device_id: int
+    cloudiot_device_id: int
     window_start: int = None
     window_end: int = None
 
@@ -52,7 +61,7 @@ class Metadata(NamedTuple):
             ("session", pa.string()),
             ("user_id", pa.int32()),
             ("device_id", pa.int32()),
-            ("device_cloudiot_id", pa.int64()),
+            ("cloudiot_device_id", pa.int64()),
             ("window_start", pa.int64()),
             ("window_end", pa.int64()),
         ]
@@ -66,23 +75,18 @@ class Metadata(NamedTuple):
         return pa.schema(cls.pyarrow_fields())
 
 
-class AlertMessageType(Enum):
-    FAILURE = 1
-    SESSION_DONE = 2
-
-
 class RenderVideoMessage(NamedTuple):
-    session: str
     metadata: Metadata
-    alert_type: AlertMessageType
-    gcs_prefix_in: str
-    gcs_prefix_out: str
-    cdn_prefix_out: str
-    cdn_suffix: str
+    print_session: str
+    event_type: AlertEventTypeEnum.video_done
+    gcs_input: str
+    gcs_output: str
+    cdn_output: str
+    cdn_relative: str
     bucket: str
 
     def full_cdn_path(self):
-        return os.path.join("gs://", self.bucket, self.cdn_prefix_out)
+        return os.path.join("gs://", self.bucket, self.cdn_output)
 
     def to_dict(self) -> Dict[str, Any]:
         return self._asdict()
@@ -93,18 +97,55 @@ class RenderVideoMessage(NamedTuple):
             pa.serialize(
                 dict(
                     metadata=metadata,
-                    session=self.session,
-                    alert_type=self.alert_type.value,
-                    gcs_prefix_in=self.gcs_prefix_in,
-                    gcs_prefix_out=self.gcs_prefix_out,
-                    cdn_prefix_out=self.cdn_prefix_out,
-                    cdn_suffix=self.cdn_suffix,
+                    print_session=self.print_session,
+                    event_type=self.event_type,
+                    gcs_input=self.gcs_input,
+                    gcs_output=self.gcs_output,
+                    cdn_output=self.cdn_output,
+                    cdn_relative=self.cdn_relative,
                     bucket=self.bucket,
                 )
             )
             .to_buffer()
             .to_pybytes()
         )
+
+    def to_flatbuffer(self) -> bytearray:
+        builder = flatbuffers.Builder(1024)
+        client_version = builder.CreateString(self.metadata.client_version)
+        print_session = builder.CreateString(self.metadata.print_session)
+
+        MetadataFB.MetadataStart(builder)
+        MetadataFB.MetadataAddUserId(builder, self.metadata.user_id)
+        MetadataFB.MetadataAddCloudiotDeviceId(
+            builder, self.metadata.cloudiot_device_id
+        )
+        MetadataFB.MetadataAddOctoprintDeviceId(
+            builder, self.metadata.octoprint_device_id
+        )
+        MetadataFB.MetadataAddClientVersion(builder, client_version)
+        MetadataFB.MetadataAddPrintSession(builder, print_session)
+        metadata = MetadataFB.MetadataEnd(builder)
+
+        gcs_input = builder.CreateString(self.gcs_input)
+        gcs_output = builder.CreateString(self.gcs_output)
+        cdn_output = builder.CreateString(self.cdn_output)
+        cdn_relative = builder.CreateString(self.cdn_relative)
+
+        AnnotatedVideo.AnnotatedVideoStart(builder)
+        AnnotatedVideo.AnnotatedVideoAddGcsInput(builder, gcs_input)
+        AnnotatedVideo.AnnotatedVideoAddGcsOutput(builder, gcs_output)
+        AnnotatedVideo.AnnotatedVideoAddCdnOutput(builder, cdn_output)
+        AnnotatedVideo.AnnotatedVideoAddCdnRelativePath(builder, cdn_relative)
+        annotated_video = AnnotatedVideo.AnnotatedVideoEnd(builder)
+
+        Alert.AlertStart(builder)
+        Alert.AlertAddEventType(builder, self.event_type)
+        Alert.AlertAddMetadata(builder, metadata)
+        Alert.AlertAddAnnotatedVideo(builder, annotated_video)
+        alert = Alert.AlertEnd(builder)
+        builder.Finish(alert)
+        return builder.Output()
 
     @classmethod
     def from_bytes(cls, pyarrow_bytes):
@@ -115,9 +156,9 @@ class RenderVideoMessage(NamedTuple):
     @staticmethod
     def pyarrow_fields():
         return [
-            ("session", pa.string()),
+            ("print_session", pa.string()),
             ("metadata", Metadata.pyarrow_struct()),
-            ("alert_type", pa.int32()),
+            ("event_type", pa.int32()),
             ("filepattern", pa.string()),
         ]
 
@@ -161,7 +202,7 @@ class HealthTrend(NamedTuple):
 
 class WindowedHealthDataFrameRow(NamedTuple):
     ts: int
-    session: str
+    print_session: str
     health_score: npt.Float32
     health_weight: npt.Float32
     detection_class: npt.Int32
@@ -174,7 +215,7 @@ class WindowedHealthDataFrameRow(NamedTuple):
     def pyarrow_fields():
         return [
             ("ts", pa.int64()),
-            ("session", pa.string()),
+            ("print_session", pa.string()),
             ("health_score", pa.float32()),
             ("health_weight", pa.float32()),
             ("detection_class", pa.int32()),
@@ -191,7 +232,7 @@ class WindowedHealthDataFrameRow(NamedTuple):
 
 
 class NestedWindowedHealthTrend(NamedTuple):
-    session: str
+    print_session: str
     metadata: Metadata
     health_score: npt.NDArray[npt.Float32]
     health_weight: npt.NDArray[npt.Float32]
@@ -231,7 +272,7 @@ class NestedWindowedHealthTrend(NamedTuple):
     @staticmethod
     def pyarrow_fields():
         return [
-            ("session", pa.string()),
+            ("print_session", pa.string()),
             ("metadata", Metadata.pyarrow_struct()),
             ("health_score", pa.list_(pa.float32())),
             ("health_weight", pa.list_(pa.float32())),
@@ -256,7 +297,7 @@ class NestedWindowedHealthTrend(NamedTuple):
 class WindowedHealthRecord(NamedTuple):
 
     ts: int
-    session: str
+    print_session: str
     metadata: Metadata
     health_score: npt.Float32
     health_weight: npt.Float32
@@ -273,7 +314,7 @@ class WindowedHealthRecord(NamedTuple):
     def pyarrow_fields():
         return [
             ("ts", pa.int64()),
-            ("session", pa.string()),
+            ("print_session", pa.string()),
             ("metadata", Metadata.pyarrow_struct()),
             ("health_score", pa.float32()),
             ("health_weight", pa.float32()),
@@ -341,7 +382,7 @@ class DeviceCalibration(NamedTuple):
 
 class AnnotatedImage(NamedTuple):
     ts: int
-    session: str
+    print_session: str
     metadata: Metadata
     annotated_image_data: bytes
 
@@ -353,11 +394,11 @@ class NestedTelemetryEvent(NamedTuple):
 
     ts: int
     client_version: str
-    session: str
+    print_session: str
 
     user_id: int
-    device_id: int
-    device_cloudiot_id: int
+    octoprint_device_id: int
+    cloudiot_device_id: int
     # BoundingBoxes
     detection_scores: npt.NDArray[npt.Float32]
     detection_classes: npt.NDArray[npt.Int32]
@@ -381,7 +422,7 @@ class NestedTelemetryEvent(NamedTuple):
             [
                 ("ts", pa.int64()),
                 ("client_version", pa.string()),
-                ("session", pa.string()),
+                ("print_session", pa.string()),
                 ("user_id", pa.int32()),
                 ("boxes_xmax", pa.list_(pa.float32(), list_size=num_detections)),
                 ("boxes_xmin", pa.list_(pa.float32(), list_size=num_detections)),
@@ -389,8 +430,8 @@ class NestedTelemetryEvent(NamedTuple):
                 ("boxes_ymin", pa.list_(pa.float32(), list_size=num_detections)),
                 ("detection_classes", pa.list_(pa.int32(), list_size=num_detections)),
                 ("detection_scores", pa.list_(pa.float32(), list_size=num_detections)),
-                ("device_cloudiot_id", pa.int64()),
-                ("device_id", pa.int32()),
+                ("cloudiot_device_id", pa.int64()),
+                ("octoprint_device_id", pa.int32()),
                 ("image_data", pa.binary()),
                 ("annotated_image_data", pa.binary()),
                 ("image_height", pa.int32()),
@@ -410,13 +451,13 @@ class NestedTelemetryEvent(NamedTuple):
                 "client_version": tf.io.FixedLenFeature([], tf.string),
                 "detection_classes": tf.io.FixedLenFeature([num_detections], tf.int64),
                 "detection_scores": tf.io.FixedLenFeature([num_detections], tf.float32),
-                "device_cloudiot_id": tf.io.FixedLenFeature([], tf.int64),
-                "device_id": tf.io.FixedLenFeature([], tf.int64),
+                "cloudiot_device_id": tf.io.FixedLenFeature([], tf.int64),
+                "octoprint_device_id": tf.io.FixedLenFeature([], tf.int64),
                 "image_data": tf.io.FixedLenFeature([], tf.string),
                 "image_height": tf.io.FixedLenFeature([], tf.int64),
                 "image_width": tf.io.FixedLenFeature([], tf.int64),
                 "num_detections": tf.io.FixedLenFeature([], tf.float32),
-                "session": tf.io.FixedLenFeature([], tf.string),
+                "print_session": tf.io.FixedLenFeature([], tf.string),
                 "ts": tf.io.FixedLenFeature([], tf.int64),
                 "user_id": tf.io.FixedLenFeature([], tf.int64),
             }
@@ -430,8 +471,7 @@ class NestedTelemetryEvent(NamedTuple):
     @classmethod
     def from_flatbuffer(cls, input_bytes):
 
-        msg = TelemetryEvent.TelemetryEvent.GetRootAsTelemetryEvent(input_bytes, 0)
-        obj = TelemetryEvent.TelemetryEventT.InitFromObj(msg)
+        obj = MonitoringEvent.MonitoringEvent.GetRootAsMonitoringEvent(input_bytes, 0)
 
         scores = []
         num_detections = []
@@ -441,22 +481,22 @@ class NestedTelemetryEvent(NamedTuple):
         boxes_ymax = []
         boxes_xmax = []
 
-        if obj.eventData.boundingBoxes is not None:
-            scores = obj.eventData.boundingBoxes.detectionScores
-            classes = obj.eventData.boundingBoxes.detectionClasses
-            num_detections = obj.eventData.boundingBoxes.numDetections
+        if obj.BoundingBoxes() is not None:
+            scores = obj.BoundingBoxes().DetectionScores()
+            classes = obj.BoundingBoxes().DetectionClasses()
+            num_detections = obj.BoundingBoxes().NumDetections()
             boxes_ymin, boxes_xmin, boxes_ymax, boxes_xmax = [
-                np.array([b.ymin, b.xmin, x.ymax, b.xmax])
-                for b in obj.eventData.boundingBoxes
+                np.array([b.Ymin(), b.Xmin(), x.Ymax(), b.Xmax()])
+                for b in obj.BoundingBoxes()
             ]
 
-        image_data = obj.eventData.image.data.tobytes()
-        session = obj.metadata.session.decode("utf-8")
+        image_data = obj.Image().DataAsNumpy().tobytes()
+        session = obj.Metadata().PrintSession().decode("utf-8")
         return cls(
-            ts=obj.metadata.ts,
-            session=session,
-            image_height=obj.eventData.image.height,
-            image_width=obj.eventData.image.width,
+            ts=obj.Metadata().Ts(),
+            print_session=session,
+            image_height=obj.Image().Height(),
+            image_width=obj.Image().Width(),
             image_tensor=tf.expand_dims(tf.io.decode_jpeg(image_data), axis=0),
             image_data=image_data,
             detection_scores=scores,
@@ -466,10 +506,10 @@ class NestedTelemetryEvent(NamedTuple):
             boxes_xmin=boxes_xmin,
             boxes_ymax=boxes_ymax,
             boxes_xmax=boxes_xmax,
-            user_id=obj.metadata.userId,
-            device_id=obj.metadata.deviceId,
-            device_cloudiot_id=obj.metadata.deviceCloudiotId,
-            client_version=obj.metadata.clientVersion.decode("utf-8"),
+            user_id=obj.Metadata().UserId(),
+            octoprint_device_id=obj.Metadata().OctoprintDeviceId(),
+            cloudiot_device_id=obj.Metadata().CloudiotDeviceId(),
+            client_version=obj.Metadata().ClientVersion().decode("utf-8"),
         )
 
     def to_dict(self) -> Dict[str, Any]:

@@ -1,7 +1,6 @@
 import logging
 import argparse
 import os
-import asyncio
 from typing import (
     Tuple,
     Any,
@@ -18,70 +17,30 @@ from print_nanny_dataflow.encoders.types import (
 from apache_beam.transforms.trigger import AfterCount, AfterWatermark, AfterAny
 import print_nanny_dataflow
 from print_nanny_dataflow.clients.rest import RestAPIClient
-import print_nanny_client
+import print_nanny_client.flatbuffers
 
 logger = logging.getLogger(__name__)
 
 
-class FileSpec(NamedTuple):
-    session: str
-    gcs_prefix: str
-    gcs_outfile: str
-
-
-class TriggerAlert(beam.DoFn):
-    def __init__(
-        self,
-        api_url,
-        api_token,
-    ):
-        self.api_url = api_url
-        self.api_token = api_token
-
-    async def trigger_alert_async(self, session: str, filepath: str):
-        rest_client = RestAPIClient(api_token=self.api_token, api_url=self.api_url)
-
-        res = await rest_client.create_print_session_alert(
-            print_session=session, annotated_video=filepath
-        )
-
-        logger.info(f"create_print_session_alert res={res}")
-
-    def trigger_alert(self, session: str, filepath):
-        logger.warning(f"Sending alert for session={session}")
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        return loop.run_until_complete(self.trigger_alert_async(session, filepath))
-
-    def process(self, msg: RenderVideoMessage):
-        try:
-            yield self.trigger_alert(msg.session, msg.cdn_suffix)
-        except print_nanny_client.exceptions.ApiException as e:
-            logger.error(e)
-
-
 class RenderVideo(beam.DoFn):
-    def process(self, msg: RenderVideoMessage) -> Iterable[RenderVideoMessage]:
+    def process(self, msg: RenderVideoMessage) -> Iterable[bytes]:
         path = os.path.dirname(print_nanny_dataflow.__file__)
         script = os.path.join(path, "scripts", "render_video.sh")
         val = subprocess.check_call(
             [
                 script,
                 "-i",
-                msg.gcs_prefix_in,
+                msg.gcs_input,
                 "-s",
-                msg.session,
+                msg.print_session,
                 "-o",
-                msg.gcs_prefix_out,
+                msg.gcs_output,
                 "-c",
                 msg.full_cdn_path(),
             ]
         )
         logger.info(val)
-        yield msg
+        yield bytes(msg.to_flatbuffer())
 
 
 if __name__ == "__main__":
@@ -90,9 +49,14 @@ if __name__ == "__main__":
     )
     parser.add_argument("--loglevel", default="INFO")
     parser.add_argument(
-        "--render-video-topic",
+        "--input-topic",
         default="monitoring-video-render",
-        help="Video rendering jobs will be output to this PubSub topic",
+        help="Video rendering jobs published to this PubSub topic",
+    )
+    parser.add_argument(
+        "--output-topic",
+        default="alerts",
+        help="Alert push jobs published to this PubSub topic",
     )
 
     parser.add_argument("--project", default="print-nanny-sandbox")
@@ -118,7 +82,11 @@ if __name__ == "__main__":
     )
 
     input_topic_path = os.path.join(
-        "projects", args.project, "topics", args.render_video_topic
+        "projects", args.project, "topics", args.input_topic
+    )
+
+    output_topic_path = os.path.join(
+        "projects", args.project, "topics", args.output_topic
     )
 
     with beam.Pipeline(options=beam_options) as p:
@@ -137,6 +105,5 @@ if __name__ == "__main__":
             )
             | "Decode bytes" >> beam.Map(lambda b: RenderVideoMessage.from_bytes(b))
             | "Run render_video.sh" >> beam.ParDo(RenderVideo())
-            | "Trigger alert" >> beam.ParDo(TriggerAlert(args.api_url, args.api_token))
-            | beam.Map(print)
+            | "Write to PubSub" >> beam.io.WriteToPubSub(output_topic_path)
         )
