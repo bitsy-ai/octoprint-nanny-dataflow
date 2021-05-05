@@ -40,7 +40,7 @@ direct:
 	--direct_num_workers=12 \
 	--runtime_type_check
 
-portable:
+portable: docker-image
 	$(PYTHON) -m $(PIPELINE) \
 	--runner PortableRunner \
 	--loglevel INFO \
@@ -53,7 +53,7 @@ portable:
 	​--setup_file=setup.py \
 	--requirements_file=requirements.txt
 
-dataflow:
+dataflow: docker-image
 	$(PYTHON) -m $(PIPELINE) \
 	--runner DataflowRunner \
 	--api-url=$(PRINT_NANNY_API_URL) \
