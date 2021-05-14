@@ -234,12 +234,7 @@ if __name__ == "__main__":
         "projects", args.project, "topics", args.render_video_topic
     )
 
-    # load input shape from model metadata
-    model_path = os.path.join("gs://", args.bucket, args.model_path)
-    # model_metadata_path = os.path.join(
-    #     "gs://", args.bucket, args.model_path, "tflite_metadata.json"
-    # )
-    # any batch size
+    model_path = os.path.join("gs://", args.bucket, args.model_path, "model.tflite")
 
     with beam.Pipeline(options=beam_options) as p:
         # parse events from PubSub topic, add timestamp used in windowing functions, annotate with bounding boxes

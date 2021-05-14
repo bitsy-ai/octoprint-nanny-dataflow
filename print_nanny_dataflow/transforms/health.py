@@ -9,7 +9,8 @@ import tensorflow as tf
 import apache_beam as beam
 import subprocess
 
-import print_nanny_dataflow
+from apache_beam.io.gcp import gcsio
+
 from print_nanny_dataflow.encoders.types import (
     NestedTelemetryEvent,
     WindowedHealthRecord,
@@ -45,56 +46,16 @@ def health_score_trend_polynomial_v1(
     return xy, trend
 
 
-def predict_bounding_boxes(element: NestedTelemetryEvent, model_path: str):
-    tflite_interpreter = tf.lite.Interpreter(model_path=model_path)
-    tflite_interpreter.allocate_tensors()
-    input_details = tflite_interpreter.get_input_details()
-    output_details = tflite_interpreter.get_output_details()
-
-    tflite_interpreter.invoke()
-
-    box_data = tflite_interpreter.get_tensor(output_details[0]["index"])
-
-    class_data = tflite_interpreter.get_tensor(output_details[1]["index"])
-    score_data = tflite_interpreter.get_tensor(output_details[2]["index"])
-    num_detections = tflite_interpreter.get_tensor(output_details[3]["index"])
-
-    class_data = np.squeeze(class_data, axis=0).astype(np.int64) + 1
-    box_data = np.squeeze(box_data, axis=0)
-    score_data = np.squeeze(score_data, axis=0)
-    num_detections = np.squeeze(num_detections, axis=0)
-
-    ymin, xmin, ymax, xmax = box_data.T
-
-    params = dict(
-        detection_scores=score_data,
-        num_detections=int(num_detections),
-        detection_classes=class_data,
-        boxes_ymin=ymin,
-        boxes_xmin=xmin,
-        boxes_ymax=ymax,
-        boxes_xmax=xmax,
-    )
-    defaults = element.to_dict()
-    defaults.update(params)
-    return NestedTelemetryEvent(**defaults)
-
-
 class PredictBoundingBoxes(beam.DoFn):
     def __init__(self, gcs_model_path):
         self.gcs_model_path = gcs_model_path
-        self.local_tmp_path = "/tmp/model/"
-        self.model_path = os.path.join(self.local_tmp_path, "model.tflite")
 
     def process(
         self, element: NestedTelemetryEvent, *args, **kwargs
     ) -> Iterable[NestedTelemetryEvent]:
-        # download model if not cached locally
-        # @TODO use a side input pattern to support model changes in experiment rollout
-        if not os.path.exists(self.local_tmp_path):
-            cmd = ["gsutil", "cp", "-r", self.gcs_model_path, "/tmp/"]
-            subprocess.call(cmd)
-        tflite_interpreter = tf.lite.Interpreter(model_path=self.model_path)
+        gcs = gcsio.GcsIO()
+        with gcs.open(self.gcs_model_path) as f:
+            tflite_interpreter = tf.lite.Interpreter(model_content=f.read())
         tflite_interpreter.allocate_tensors()
         input_details = tflite_interpreter.get_input_details()
         output_details = tflite_interpreter.get_output_details()
@@ -125,7 +86,7 @@ class PredictBoundingBoxes(beam.DoFn):
         )
         defaults = element.to_dict()
         defaults.update(params)
-        return NestedTelemetryEvent(**defaults)
+        yield NestedTelemetryEvent(**defaults)
 
 
 class ExplodeWindowedHealthRecord(beam.DoFn):
