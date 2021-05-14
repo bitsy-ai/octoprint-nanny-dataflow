@@ -59,7 +59,7 @@ portable: docker-image
 sdist:
 	python setup.py sdist
 
-dataflow: docker-image sdist
+dataflow: clean docker-image sdist
 	$(PYTHON) -m $(PIPELINE) \
 	--runner DataflowRunner \
 	--api-url=$(PRINT_NANNY_API_URL) \
@@ -69,13 +69,13 @@ dataflow: docker-image sdist
 	--sdk_container_image=$(IMAGE) \
 	--temp_location=gs://$(BUCKET)/dataflow/tmp \
 	--job_name=$(JOB_NAME) \
-	​--setup_file=setup.py \
+	​--setup_file=$(PWD)/setup.py \
 	--update \
 	--staging_location=gs://$(BUCKET)/dataflow/staging \
 	--streaming \
-	--extra_package=dist/print-nanny-dataflow-0.1.0.tar.gz \
-	--save_main_session \
 	--bucket=$(BUCKET)
+
+# 	# --extra_package=dist/print-nanny-dataflow-0.1.0.tar.gz \
 
 lint:
 	$(PYTHON) -m black setup.py print_nanny_dataflow conftest.py tests
