@@ -2,10 +2,8 @@ import logging
 import argparse
 import os
 from typing import (
-    Tuple,
     Any,
     Iterable,
-    NamedTuple,
 )
 import subprocess
 
@@ -16,8 +14,6 @@ from print_nanny_dataflow.encoders.types import (
 )
 from apache_beam.transforms.trigger import AfterCount, AfterWatermark, AfterAny
 import print_nanny_dataflow
-from print_nanny_dataflow.clients.rest import RestAPIClient
-import print_nanny_client.flatbuffers
 
 logger = logging.getLogger(__name__)
 

@@ -54,7 +54,10 @@ portable: docker-image
 	​--setup_file=setup.py \
 	--requirements_file=requirements.txt
 
-dataflow: docker-image
+sdist:
+	python setup.py sdist
+
+dataflow: docker-image sdist
 	$(PYTHON) -m $(PIPELINE) \
 	--runner DataflowRunner \
 	--api-url=$(PRINT_NANNY_API_URL) \
@@ -64,13 +67,14 @@ dataflow: docker-image
 	--sdk_container_image=$(IMAGE) \
 	--temp_location=gs://$(BUCKET)/dataflow/tmp \
 	--job_name=$(JOB_NAME) \
-	​--setup_file=src/setup.py \
+	​--setup_file=setup.py \
 	--update \
 	--staging_location=gs://$(BUCKET)/dataflow/staging \
-	--streaming
+	--streaming \
+	--extra_package=dist/print-nanny-dataflow-0.1.0.tar.gz
 
 lint:
-	$(PYTHON) -m black src/setup.py src conftest.py tests
+	$(PYTHON) -m black setup.py print_nanny_dataflow conftest.py tests
 
 install-git-hooks:
 	cp -a hooks/. .git/hooks/
