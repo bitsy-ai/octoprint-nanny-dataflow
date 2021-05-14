@@ -86,6 +86,11 @@ async def download_active_experiment_model(model_dir=".tmp/", model_artifact_id=
     logger.info(f"Finished extracting {tmp_artifacts_tarball}")
 
 
+def add_timestamp(element):
+    import apache_beam as beam
+    return beam.window.TimestampedValue(element, element.ts)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -254,8 +259,7 @@ if __name__ == "__main__":
             >> beam.Map(NestedTelemetryEvent.from_flatbuffer).with_output_types(
                 NestedTelemetryEvent
             )
-            | "With timestamps"
-            >> beam.Map(lambda x: beam.window.TimestampedValue(x, x.ts))
+            | "With timestamps" >> beam.Map(add_timestamp)
             | "Add Bounding Box Annotations"
             >> beam.Map(lambda x: predict_bounding_boxes(x, model_path))
         )
