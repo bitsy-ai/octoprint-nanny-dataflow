@@ -2,13 +2,13 @@ from typing import Tuple, Iterable, Optional, Any, NamedTuple
 import logging
 from datetime import datetime
 import os
-import io
+import json
 import numpy as np
 import pandas as pd
 import tensorflow as tf
 import apache_beam as beam
-from apache_beam.dataframe.transforms import DataframeTransform
 
+import print_nanny_dataflow
 from print_nanny_dataflow.encoders.types import (
     NestedTelemetryEvent,
     WindowedHealthRecord,
@@ -80,8 +80,13 @@ def predict_bounding_boxes(element: NestedTelemetryEvent, model_path: str):
 
 
 class PredictBoundingBoxes(beam.DoFn):
-    def __init__(self, model_path):
-        self.model_path = model_path
+    def __init__(self):
+        module_path = os.path.dirname(print_nanny_dataflow.__file__)
+        self.data_path = os.path.join(module_path, "data")
+        self.model_path = os.path.join(self.data_path, "model.tflite")
+        model_metadata_path = os.path.join(self.data_path, "tflite_metadata.json")
+        model_metadata = json.load(open(model_metadata_path, "r"))
+        input_shape = model_metadata["inputShape"]
 
     def process(
         self, element: NestedTelemetryEvent, *args, **kwargs

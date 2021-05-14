@@ -233,8 +233,7 @@ if __name__ == "__main__":
                 NestedTelemetryEvent
             )
             | "With timestamps" >> beam.Map(add_timestamp)
-            | "Add Bounding Box Annotations"
-            >> beam.ParDo(PredictBoundingBoxes(model_path))
+            | "Add Bounding Box Annotations" >> beam.ParDo(PredictBoundingBoxes())
         )
 
         # key by session id
