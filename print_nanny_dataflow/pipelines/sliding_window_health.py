@@ -207,7 +207,7 @@ if __name__ == "__main__":
         "gs://", args.bucket, args.fixed_window_tfrecord_sink
     )
     fixed_window_parquet_sink = os.path.join(
-        "gs://", args.bucket, args.fixed_window_parquet
+        "gs://", args.bucket, args.fixed_window_parquet_sink
     )
     fixed_window_jpg_sink = os.path.join(
         "gs://", args.bucket, args.fixed_window_jpg_sink
@@ -219,7 +219,7 @@ if __name__ == "__main__":
         "gs://", args.bucket, args.sliding_window_health_raw_sink
     )
     sliding_window_health_filtered_sink = os.path.join(
-        "gs://", args.bucket, args.sliding_window_filtered_sink
+        "gs://", args.bucket, args.sliding_window_health_filtered_sink
     )
     calibration_base_path = os.path.join(
         "gs://", args.bucket, args.calibration_base_path
