@@ -71,7 +71,8 @@ dataflow: docker-image sdist
 	--update \
 	--staging_location=gs://$(BUCKET)/dataflow/staging \
 	--streaming \
-	--extra_package=dist/print-nanny-dataflow-0.1.0.tar.gz
+	--extra_package=dist/print-nanny-dataflow-0.1.0.tar.gz \
+	--save_main_session
 
 lint:
 	$(PYTHON) -m black setup.py print_nanny_dataflow conftest.py tests
