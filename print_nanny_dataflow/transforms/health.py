@@ -82,23 +82,22 @@ def predict_bounding_boxes(element: NestedTelemetryEvent, model_path: str):
 class PredictBoundingBoxes(beam.DoFn):
     def __init__(self, model_path):
         self.model_path = model_path
-        self.tflite_interpreter = tf.lite.Interpreter(model_path=model_path)
-        self.tflite_interpreter.allocate_tensors()
-        self.input_details = self.tflite_interpreter.get_input_details()
-        self.output_details = self.tflite_interpreter.get_output_details()
 
     def process(
         self, element: NestedTelemetryEvent, *args, **kwargs
     ) -> Iterable[NestedTelemetryEvent]:
-        self.tflite_interpreter.invoke()
+        tflite_interpreter = tf.lite.Interpreter(model_path=self.model_path)
+        tflite_interpreter.allocate_tensors()
+        input_details = tflite_interpreter.get_input_details()
+        output_details = tflite_interpreter.get_output_details()
 
-        box_data = self.tflite_interpreter.get_tensor(self.output_details[0]["index"])
+        tflite_interpreter.invoke()
 
-        class_data = self.tflite_interpreter.get_tensor(self.output_details[1]["index"])
-        score_data = self.tflite_interpreter.get_tensor(self.output_details[2]["index"])
-        num_detections = self.tflite_interpreter.get_tensor(
-            self.output_details[3]["index"]
-        )
+        box_data = tflite_interpreter.get_tensor(output_details[0]["index"])
+
+        class_data = tflite_interpreter.get_tensor(output_details[1]["index"])
+        score_data = tflite_interpreter.get_tensor(output_details[2]["index"])
+        num_detections = tflite_interpreter.get_tensor(output_details[3]["index"])
 
         class_data = np.squeeze(class_data, axis=0).astype(np.int64) + 1
         box_data = np.squeeze(box_data, axis=0)
