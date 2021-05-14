@@ -2,8 +2,6 @@
 
 from __future__ import absolute_import
 
-import pandas as pd
-from datetime import datetime
 import aiohttp
 import argparse
 import logging
@@ -11,27 +9,13 @@ import io
 import os
 import json
 import logging
-import asyncio
 import tarfile
-import tempfile
 
-import numpy as np
-import tensorflow as tf
 import apache_beam as beam
 from typing import List, Tuple, Any, Iterable, Generator, Coroutine, Optional, Union
-from apache_beam import window
 from apache_beam.options.pipeline_options import GoogleCloudOptions
 from apache_beam.options.pipeline_options import PipelineOptions
-import PIL
-from apache_beam.dataframe.convert import to_dataframe, to_pcollection
-from apache_beam.dataframe.transforms import DataframeTransform
-from apache_beam.transforms.trigger import (
-    OrFinally,
-    AfterCount,
-    Repeatedly,
-    AfterWatermark,
-    AfterProcessingTime,
-)
+
 from apache_beam.transforms import trigger
 from tensorflow_transform.tf_metadata import dataset_metadata
 
@@ -41,12 +25,9 @@ from print_nanny_dataflow.transforms.io import (
 )
 from print_nanny_dataflow.transforms.health import (
     ExplodeWindowedHealthRecord,
-    predict_bounding_boxes,
     PredictBoundingBoxes,
-    health_score_trend_polynomial_v1,
     FilterAreaOfInterest,
     SortWindowedHealthDataframe,
-    MonitorHealthStateful,
     CreateVideoRenderMessage,
 )
 
@@ -59,11 +40,8 @@ from print_nanny_dataflow.encoders.types import (
     NestedWindowedHealthTrend,
 )
 
-from print_nanny_dataflow.utils.visualization import (
-    visualize_boxes_and_labels_on_image_array,
-)
+
 from print_nanny_dataflow.clients.rest import RestAPIClient
-import pyarrow as pa
 
 logger = logging.getLogger(__name__)
 
