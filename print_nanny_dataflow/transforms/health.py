@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 import apache_beam as beam
+import subprocess
 
 import print_nanny_dataflow
 from print_nanny_dataflow.encoders.types import (
@@ -80,12 +81,19 @@ def predict_bounding_boxes(element: NestedTelemetryEvent, model_path: str):
 
 
 class PredictBoundingBoxes(beam.DoFn):
-    def __init__(self, model_path):
-        self.model_path = model_path
+    def __init__(self, gcs_model_path):
+        self.gcs_model_path = gcs_model_path
+        self.local_tmp_path = "/tmp/model/"
+        self.model_path = os.path.join(self.local_tmp_path, "model.tflite")
 
     def process(
         self, element: NestedTelemetryEvent, *args, **kwargs
     ) -> Iterable[NestedTelemetryEvent]:
+        # download model if not cached locally
+        # @TODO use a side input pattern to support model changes in experiment rollout
+        if not os.path.exists(self.local_tmp_path):
+            cmd = ["gsutil", "cp", "-r", self.gcs_model_path, "/tmp/"]
+            subprocess.call(cmd)
         tflite_interpreter = tf.lite.Interpreter(model_path=self.model_path)
         tflite_interpreter.allocate_tensors()
         input_details = tflite_interpreter.get_input_details()
