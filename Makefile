@@ -7,7 +7,7 @@ PIP=.venv/bin/pip
 PROJECT ?= "print-nanny-sandbox"
 PRINT_NANNY_API_URL ?= "http://localhost:8000/api"
 JOB_NAME ?= "sliding-window-health"
-PIPELINE ?= "print_nanny_dataflow.sliding_window_health"
+PIPELINE ?= "print_nanny_dataflow.pipelines.sliding_window_health"
 IMAGE ?= "gcr.io/${PROJECT}/print-nanny-dataflow:$(shell git rev-parse HEAD)"
 BUCKET ?= "print-nanny-sandbox"
 
