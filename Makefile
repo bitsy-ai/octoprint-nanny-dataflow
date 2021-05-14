@@ -61,16 +61,16 @@ dataflow: docker-image
 	--api-token=$$PRINT_NANNY_API_TOKEN \
 	--project=$(PROJECT) \
 	--experiment=use_runner_v2 \
-	--worker_harness_container_image=$(IMAGE) \
+	--sdk_container_image=$(IMAGE) \
 	--temp_location=gs://$(BUCKET)/dataflow/tmp \
 	--job_name=$(JOB_NAME) \
-	​--setup_file=./setup.py \
+	​--setup_file=src/setup.py \
 	--update \
 	--staging_location=gs://$(BUCKET)/dataflow/staging \
-	--requirements_file=requirements.txt
+	--streaming
 
 lint:
-	$(PYTHON) -m black setup.py print_nanny_dataflow conftest.py tests
+	$(PYTHON) -m black src/setup.py src conftest.py tests
 
 install-git-hooks:
 	cp -a hooks/. .git/hooks/
