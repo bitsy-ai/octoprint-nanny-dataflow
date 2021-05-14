@@ -4,3 +4,4 @@ RUN apt-get update -qq && apt-get -y install \
     ffmpeg
 
 ADD models .
+ADD scripts .

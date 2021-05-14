@@ -191,11 +191,6 @@ if __name__ == "__main__":
         "--api-url", default="https://print-nanny.com/api", help="Print Nanny API url"
     )
 
-    parser.add_argument(
-        "--model-version",
-        default="tflite-print3d_20201101015829-2021-02-24T05:16:05.082500Z",
-    )
-
     parser.add_argument("--model-dir", default="models/", help="Path to models")
 
     parser.add_argument(
@@ -218,10 +213,8 @@ if __name__ == "__main__":
     )
 
     # load input shape from model metadata
-    model_path = os.path.join(args.model_dir, args.model_version, "model.tflite")
-    model_metadata_path = os.path.join(
-        args.model_dir, args.model_version, "tflite_metadata.json"
-    )
+    model_path = os.path.join(args.model_dir, "model.tflite")
+    model_metadata_path = os.path.join(args.model_dir, "tflite_metadata.json")
     model_metadata = json.load(open(model_metadata_path, "r"))
     input_shape = model_metadata["inputShape"]
     # any batch size
