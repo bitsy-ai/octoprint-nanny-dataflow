@@ -64,6 +64,7 @@ dataflow: docker-image
 	--worker_harness_container_image=$(IMAGE) \
 	--temp_location=gs://$(BUCKET)/dataflow/tmp \
 	--job_name=$(JOB_NAME) \
+	​--setup_file=setup.py \
 	--staging_location=gs://$(BUCKET)/dataflow/staging
 
 lint:

@@ -21,7 +21,7 @@ REQUIRES = [
     "nptyping",
     "numpy",
     "pillow",
-    "print_nanny_client==0.6.0-dev15",
+    "print_nanny_client==0.6.1-rc4",
     "gcsfs",
     "pyarrow",
     "pandas",
