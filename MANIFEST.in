@@ -1,4 +1,0 @@
-include print_nanny_dataflow/data/dict.txt
-include print_nanny_dataflow/data/model.tflite
-include print_nanny_dataflow/data/saved_model.pb
-include print_nanny_dataflow/data/tflite_metadata.json
