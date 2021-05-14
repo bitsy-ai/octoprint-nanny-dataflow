@@ -79,6 +79,48 @@ def predict_bounding_boxes(element: NestedTelemetryEvent, model_path: str):
     return NestedTelemetryEvent(**defaults)
 
 
+class PredictBoundingBoxes(beam.DoFn):
+    def __init__(self, model_path):
+        self.model_path = model_path
+        self.tflite_interpreter = tf.lite.Interpreter(model_path=model_path)
+        self.tflite_interpreter.allocate_tensors()
+        self.input_details = self.tflite_interpreter.get_input_details()
+        self.output_details = self.tflite_interpreter.get_output_details()
+
+    def process(
+        self, element: NestedTelemetryEvent, *args, **kwargs
+    ) -> Iterable[NestedTelemetryEvent]:
+        self.tflite_interpreter.invoke()
+
+        box_data = self.tflite_interpreter.get_tensor(self.output_details[0]["index"])
+
+        class_data = self.tflite_interpreter.get_tensor(self.output_details[1]["index"])
+        score_data = self.tflite_interpreter.get_tensor(self.output_details[2]["index"])
+        num_detections = self.tflite_interpreter.get_tensor(
+            self.output_details[3]["index"]
+        )
+
+        class_data = np.squeeze(class_data, axis=0).astype(np.int64) + 1
+        box_data = np.squeeze(box_data, axis=0)
+        score_data = np.squeeze(score_data, axis=0)
+        num_detections = np.squeeze(num_detections, axis=0)
+
+        ymin, xmin, ymax, xmax = box_data.T
+
+        params = dict(
+            detection_scores=score_data,
+            num_detections=int(num_detections),
+            detection_classes=class_data,
+            boxes_ymin=ymin,
+            boxes_xmin=xmin,
+            boxes_ymax=ymax,
+            boxes_xmax=xmax,
+        )
+        defaults = element.to_dict()
+        defaults.update(params)
+        return NestedTelemetryEvent(**defaults)
+
+
 class ExplodeWindowedHealthRecord(beam.DoFn):
     def process(
         self,

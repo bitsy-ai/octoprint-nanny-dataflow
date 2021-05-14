@@ -42,6 +42,7 @@ from print_nanny_dataflow.transforms.io import (
 from print_nanny_dataflow.transforms.health import (
     ExplodeWindowedHealthRecord,
     predict_bounding_boxes,
+    PredictBoundingBoxes,
     health_score_trend_polynomial_v1,
     FilterAreaOfInterest,
     SortWindowedHealthDataframe,
@@ -88,6 +89,7 @@ async def download_active_experiment_model(model_dir=".tmp/", model_artifact_id=
 
 def add_timestamp(element):
     import apache_beam as beam
+
     return beam.window.TimestampedValue(element, element.ts)
 
 
@@ -261,7 +263,7 @@ if __name__ == "__main__":
             )
             | "With timestamps" >> beam.Map(add_timestamp)
             | "Add Bounding Box Annotations"
-            >> beam.Map(lambda x: predict_bounding_boxes(x, model_path))
+            >> beam.ParDo(PredictBoundingBoxes(model_path))
         )
 
         # key by session id
