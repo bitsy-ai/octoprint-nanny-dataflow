@@ -40,7 +40,7 @@ from print_nanny_dataflow.encoders.types import (
     NestedWindowedHealthTrend,
 )
 
-
+import print_nanny_dataflow
 from print_nanny_dataflow.clients.rest import RestAPIClient
 
 logger = logging.getLogger(__name__)
@@ -191,8 +191,6 @@ if __name__ == "__main__":
         "--api-url", default="https://print-nanny.com/api", help="Print Nanny API url"
     )
 
-    parser.add_argument("--model-dir", default="models/", help="Path to models")
-
     parser.add_argument(
         "--batch-size",
         default=256,
@@ -213,8 +211,10 @@ if __name__ == "__main__":
     )
 
     # load input shape from model metadata
-    model_path = os.path.join(args.model_dir, "model.tflite")
-    model_metadata_path = os.path.join(args.model_dir, "tflite_metadata.json")
+    module_path = os.path.dirname(print_nanny_dataflow.__file__)
+    data_path = os.path.join(module_path, "data")
+    model_path = os.path.join(data_path, "model.tflite")
+    model_metadata_path = os.path.join(data_path, "tflite_metadata.json")
     model_metadata = json.load(open(model_metadata_path, "r"))
     input_shape = model_metadata["inputShape"]
     # any batch size

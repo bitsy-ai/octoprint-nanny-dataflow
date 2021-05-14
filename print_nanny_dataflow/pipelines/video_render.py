@@ -20,9 +20,8 @@ logger = logging.getLogger(__name__)
 
 class RenderVideo(beam.DoFn):
     def process(self, msg: RenderVideoMessage) -> Iterable[bytes]:
-        # path = os.path.dirname(print_nanny_dataflow.__file__)
-        # script = os.path.join(path, "scripts", "render_video.sh")
-        script = os.path.join("scripts", "render_video.sh")
+        path = os.path.dirname(print_nanny_dataflow.__file__)
+        script = os.path.join(path, "scripts", "render_video.sh")
         val = subprocess.check_call(
             [
                 script,

@@ -38,6 +38,9 @@ setup(
     author_email="leigh@bitsy.ai",
     url="",
     install_requires=REQUIRES,
+    scripts=["print_nanny_dataflow/scripts/render_video.sh"],
     packages=find_packages(),
-    scripts=["scripts/render_video.sh"],
+    include_package_data=True,
+    # package_data={'print_nanny_dataflow': ['data/*']},
+    # zip_safe=False
 )
