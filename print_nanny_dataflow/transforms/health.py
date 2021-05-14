@@ -2,12 +2,14 @@ from typing import Tuple, Iterable, Optional, Any, NamedTuple
 import logging
 from datetime import datetime
 import os
-import io
+import json
 import numpy as np
 import pandas as pd
 import tensorflow as tf
 import apache_beam as beam
-from apache_beam.dataframe.transforms import DataframeTransform
+import subprocess
+
+from apache_beam.io.gcp import gcsio
 
 from print_nanny_dataflow.encoders.types import (
     NestedTelemetryEvent,
@@ -44,39 +46,47 @@ def health_score_trend_polynomial_v1(
     return xy, trend
 
 
-def predict_bounding_boxes(element: NestedTelemetryEvent, model_path: str):
-    tflite_interpreter = tf.lite.Interpreter(model_path=model_path)
-    tflite_interpreter.allocate_tensors()
-    input_details = tflite_interpreter.get_input_details()
-    output_details = tflite_interpreter.get_output_details()
+class PredictBoundingBoxes(beam.DoFn):
+    def __init__(self, gcs_model_path):
+        self.gcs_model_path = gcs_model_path
 
-    tflite_interpreter.invoke()
+    def process(
+        self, element: NestedTelemetryEvent, *args, **kwargs
+    ) -> Iterable[NestedTelemetryEvent]:
+        gcs = gcsio.GcsIO()
+        with gcs.open(self.gcs_model_path) as f:
+            tflite_interpreter = tf.lite.Interpreter(model_content=f.read())
+        tflite_interpreter.allocate_tensors()
+        input_details = tflite_interpreter.get_input_details()
+        output_details = tflite_interpreter.get_output_details()
 
-    box_data = tflite_interpreter.get_tensor(output_details[0]["index"])
+        tflite_interpreter.invoke()
 
-    class_data = tflite_interpreter.get_tensor(output_details[1]["index"])
-    score_data = tflite_interpreter.get_tensor(output_details[2]["index"])
-    num_detections = tflite_interpreter.get_tensor(output_details[3]["index"])
+        box_data = tflite_interpreter.get_tensor(output_details[0]["index"])
 
-    class_data = np.squeeze(class_data, axis=0).astype(np.int64) + 1
-    box_data = np.squeeze(box_data, axis=0)
-    score_data = np.squeeze(score_data, axis=0)
-    num_detections = np.squeeze(num_detections, axis=0)
+        class_data = tflite_interpreter.get_tensor(output_details[1]["index"])
+        score_data = tflite_interpreter.get_tensor(output_details[2]["index"])
+        num_detections = tflite_interpreter.get_tensor(output_details[3]["index"])
 
-    ymin, xmin, ymax, xmax = box_data.T
+        class_data = np.squeeze(class_data, axis=0).astype(np.int64) + 1
+        box_data = np.squeeze(box_data, axis=0)
+        score_data = np.squeeze(score_data, axis=0)
+        num_detections = np.squeeze(num_detections, axis=0)
 
-    params = dict(
-        detection_scores=score_data,
-        num_detections=int(num_detections),
-        detection_classes=class_data,
-        boxes_ymin=ymin,
-        boxes_xmin=xmin,
-        boxes_ymax=ymax,
-        boxes_xmax=xmax,
-    )
-    defaults = element.to_dict()
-    defaults.update(params)
-    return NestedTelemetryEvent(**defaults)
+        ymin, xmin, ymax, xmax = box_data.T
+
+        params = dict(
+            detection_scores=score_data,
+            num_detections=int(num_detections),
+            detection_classes=class_data,
+            boxes_ymin=ymin,
+            boxes_xmin=xmin,
+            boxes_ymax=ymax,
+            boxes_xmax=xmax,
+        )
+        defaults = element.to_dict()
+        defaults.update(params)
+        yield NestedTelemetryEvent(**defaults)
 
 
 class ExplodeWindowedHealthRecord(beam.DoFn):
@@ -120,11 +130,9 @@ class FilterAreaOfInterest(beam.DoFn):
     def __init__(
         self,
         calibration_base_path: str,
-        score_threshold: float = 0.5,
         calibration_filename: str = "calibration.json",
     ):
         self.calibration_base_path = calibration_base_path
-        self.score_threshold = score_threshold
         self.calibration_filename = calibration_filename
 
     def load_calibration(

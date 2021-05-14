@@ -21,7 +21,7 @@ REQUIRES = [
     "nptyping",
     "numpy",
     "pillow",
-    "print_nanny_client==0.6.0-dev15",
+    "print_nanny_client==0.6.1-rc4",
     "gcsfs",
     "pyarrow",
     "pandas",
@@ -38,7 +38,7 @@ setup(
     author_email="leigh@bitsy.ai",
     url="",
     install_requires=REQUIRES,
-    packages=find_packages(),
     scripts=["print_nanny_dataflow/scripts/render_video.sh"],
+    packages=find_packages(),
     include_package_data=True,
 )

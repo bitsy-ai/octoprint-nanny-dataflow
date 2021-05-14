@@ -10,6 +10,7 @@ JOB_NAME ?= "sliding-window-health"
 PIPELINE ?= "print_nanny_dataflow.pipelines.sliding_window_health"
 IMAGE ?= "gcr.io/${PROJECT}/print-nanny-dataflow:$(shell git rev-parse HEAD)"
 BUCKET ?= "print-nanny-sandbox"
+MAX_NUM_WORKERS ?= 2
 
 clean-build: ## remove build artifacts
 	rm -fr build/
@@ -39,7 +40,8 @@ direct:
 	--api-url=$(PRINT_NANNY_API_URL) \
 	--api-token=$$PRINT_NANNY_API_TOKEN \
 	--direct_num_workers=12 \
-	--runtime_type_check
+	--runtime_type_check \
+	--bucket=$(BUCKET)
 
 portable: docker-image
 	$(PYTHON) -m $(PIPELINE) \
@@ -52,19 +54,30 @@ portable: docker-image
 	--environment_config=$(IMAGE) \
 	--sdk_location=container \
 	​--setup_file=setup.py \
-	--requirements_file=requirements.txt
+	--requirements_file=requirements.txt \
+	--bucket=$(BUCKET)
 
-dataflow: docker-image
+sdist:
+	python setup.py sdist
+
+dataflow: clean docker-image sdist
 	$(PYTHON) -m $(PIPELINE) \
 	--runner DataflowRunner \
 	--api-url=$(PRINT_NANNY_API_URL) \
 	--api-token=$$PRINT_NANNY_API_TOKEN \
 	--project=$(PROJECT) \
 	--experiment=use_runner_v2 \
-	--worker_harness_container_image=$(IMAGE) \
+	--sdk_container_image=$(IMAGE) \
 	--temp_location=gs://$(BUCKET)/dataflow/tmp \
 	--job_name=$(JOB_NAME) \
-	--staging_location=gs://$(BUCKET)/dataflow/staging
+	​--setup_file=$(PWD)/setup.py \
+	--staging_location=gs://$(BUCKET)/dataflow/staging \
+	--streaming \
+	--update \
+	--max_num_workers=$(MAX_NUM_WORKERS) \
+	--bucket=$(BUCKET)
+
+# 	# --extra_package=dist/print-nanny-dataflow-0.1.0.tar.gz \
 
 lint:
 	$(PYTHON) -m black setup.py print_nanny_dataflow conftest.py tests

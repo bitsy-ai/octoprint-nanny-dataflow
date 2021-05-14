@@ -464,7 +464,7 @@ class NestedTelemetryEvent(NamedTuple):
         )
 
     @classmethod
-    def tfrecord_metadata(cls, num_detections: int) -> DatasetMetadata:
+    def tfrecord_metadata(cls, num_detections: int) -> dataset_metadata.DatasetMetadata:
         schema = cls.tfrecord_schema(num_detections)
         return dataset_metadata.DatasetMetadata(schema)
 

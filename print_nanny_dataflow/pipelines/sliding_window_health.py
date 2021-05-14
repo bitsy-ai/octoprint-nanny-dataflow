@@ -2,8 +2,6 @@
 
 from __future__ import absolute_import
 
-import pandas as pd
-from datetime import datetime
 import aiohttp
 import argparse
 import logging
@@ -11,27 +9,13 @@ import io
 import os
 import json
 import logging
-import asyncio
 import tarfile
-import tempfile
 
-import numpy as np
-import tensorflow as tf
 import apache_beam as beam
 from typing import List, Tuple, Any, Iterable, Generator, Coroutine, Optional, Union
-from apache_beam import window
 from apache_beam.options.pipeline_options import GoogleCloudOptions
 from apache_beam.options.pipeline_options import PipelineOptions
-import PIL
-from apache_beam.dataframe.convert import to_dataframe, to_pcollection
-from apache_beam.dataframe.transforms import DataframeTransform
-from apache_beam.transforms.trigger import (
-    OrFinally,
-    AfterCount,
-    Repeatedly,
-    AfterWatermark,
-    AfterProcessingTime,
-)
+
 from apache_beam.transforms import trigger
 from tensorflow_transform.tf_metadata import dataset_metadata
 
@@ -41,11 +25,9 @@ from print_nanny_dataflow.transforms.io import (
 )
 from print_nanny_dataflow.transforms.health import (
     ExplodeWindowedHealthRecord,
-    predict_bounding_boxes,
-    health_score_trend_polynomial_v1,
+    PredictBoundingBoxes,
     FilterAreaOfInterest,
     SortWindowedHealthDataframe,
-    MonitorHealthStateful,
     CreateVideoRenderMessage,
 )
 
@@ -58,11 +40,8 @@ from print_nanny_dataflow.encoders.types import (
     NestedWindowedHealthTrend,
 )
 
-from print_nanny_dataflow.utils.visualization import (
-    visualize_boxes_and_labels_on_image_array,
-)
+import print_nanny_dataflow
 from print_nanny_dataflow.clients.rest import RestAPIClient
-import pyarrow as pa
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +63,12 @@ async def download_active_experiment_model(model_dir=".tmp/", model_artifact_id=
     with tarfile.open(tmp_artifacts_tarball, "r:gz") as tar:
         tar.extractall(model_dir)
     logger.info(f"Finished extracting {tmp_artifacts_tarball}")
+
+
+def add_timestamp(element):
+    import apache_beam as beam
+
+    return beam.window.TimestampedValue(element, element.ts)
 
 
 if __name__ == "__main__":
@@ -136,49 +121,49 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--fixed-window-tfrecord-sink",
-        default="gs://print-nanny-sandbox/dataflow/telemetry_event/fixed_window/NestedTelemetryEvent/tfrecords",
+        default="dataflow/telemetry_event/fixed_window/NestedTelemetryEvent/tfrecords",
         help="Unfiltered NestedTelemetryEvent emitted from FixedWindow (single point in time)",
     )
 
     parser.add_argument(
         "--fixed-window-parquet-sink",
-        default="gs://print-nanny-sandbox/dataflow/telemetry_event/fixed_window/NestedTelemetryEvent/parquet",
+        default="dataflow/telemetry_event/fixed_window/NestedTelemetryEvent/parquet",
         help="Unfiltered NestedTelemetryEvent emitted from FixedWindow (single point in time)",
     )
 
     parser.add_argument(
         "--fixed-window-jpg-sink",
-        default="gs://print-nanny-sandbox/dataflow/telemetry_event/fixed_window/NestedTelemetryEvent/jpg",
+        default="dataflow/telemetry_event/fixed_window/NestedTelemetryEvent/jpg",
         help="Bounding-box annotated images (single point in time)",
     )
 
     parser.add_argument(
         "--fixed-window-mp4-sink",
-        default="gs://print-nanny-sandbox/dataflow/telemetry_event/fixed_window/NestedTelemetryEvent/mp4",
+        default="dataflow/telemetry_event/fixed_window/NestedTelemetryEvent/mp4",
         help="Bounding-box annotated video (single point in time)",
     )
 
     parser.add_argument(
         "--sliding-window-health-raw-sink",
-        default="gs://print-nanny-sandbox/dataflow/telemetry_event/sliding_window/WindowedHealthRecord/parquet",
+        default="dataflow/telemetry_event/sliding_window/WindowedHealthRecord/parquet",
         help="Unfiltered WindowedHealthRecord emitted from SlidingWindow",
     )
 
     parser.add_argument(
         "--sliding-window-health-filtered-sink",
-        default="gs://print-nanny-sandbox/dataflow/telemetry_event/sliding_window/WindowedHealthRecord/filtered/parquet",
+        default="dataflow/telemetry_event/sliding_window/WindowedHealthRecord/filtered/parquet",
         help="Unfiltered WindowedHealthRecord emitted from SlidingWindow",
     )
 
     parser.add_argument(
         "--session-window-health-trend-sink",
-        default="gs://print-nanny-sandbox/dataflow/telemetry_event/session_window/NestedWindowedHealthTrend/parquet",
+        default="dataflow/telemetry_event/session_window/NestedWindowedHealthTrend/parquet",
         help="Post-filtered WindowedHelathDataframe emitted from session window",
     )
 
     parser.add_argument(
         "--calibration-base-path",
-        default="gs://print-nanny-sandbox/uploads/device_calibration",
+        default="uploads/device_calibration",
         help="Files will be output to this gcs bucket",
     )
 
@@ -207,21 +192,42 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--model-version",
-        default="tflite-print3d_20201101015829-2021-02-24T05:16:05.082500Z",
-    )
-
-    parser.add_argument("--model-dir", default="models/", help="Path to models")
-
-    parser.add_argument(
         "--batch-size",
         default=256,
     )
+
+    parser.add_argument("--min-score-threshold", default=0.66)
+
+    parser.add_argument("--max-boxes-to-draw", default=5)
+
+    parser.add_argument("--model-path", default="dataflow/models")
     parser.add_argument("--runner", default="DataflowRunner")
 
     args, pipeline_args = parser.parse_known_args()
 
     logging.basicConfig(level=getattr(logging, args.loglevel))
+
+    fixed_window_tfrecord_sink = os.path.join(
+        "gs://", args.bucket, args.fixed_window_tfrecord_sink
+    )
+    fixed_window_parquet_sink = os.path.join(
+        "gs://", args.bucket, args.fixed_window_parquet_sink
+    )
+    fixed_window_jpg_sink = os.path.join(
+        "gs://", args.bucket, args.fixed_window_jpg_sink
+    )
+    fixed_window_mp4_sink = os.path.join(
+        "gs://", args.bucket, args.fixed_window_mp4_sink
+    )
+    sliding_window_health_raw_sink = os.path.join(
+        "gs://", args.bucket, args.sliding_window_health_raw_sink
+    )
+    sliding_window_health_filtered_sink = os.path.join(
+        "gs://", args.bucket, args.sliding_window_health_filtered_sink
+    )
+    calibration_base_path = os.path.join(
+        "gs://", args.bucket, args.calibration_base_path
+    )
 
     beam_options = PipelineOptions(
         pipeline_args, streaming=True, runner=args.runner, project=args.project
@@ -232,15 +238,7 @@ if __name__ == "__main__":
         "projects", args.project, "topics", args.render_video_topic
     )
 
-    # load input shape from model metadata
-    model_path = os.path.join(args.model_dir, args.model_version, "model.tflite")
-    model_metadata_path = os.path.join(
-        args.model_dir, args.model_version, "tflite_metadata.json"
-    )
-    model_metadata = json.load(open(model_metadata_path, "r"))
-    input_shape = model_metadata["inputShape"]
-    # any batch size
-    input_shape[0] = None
+    model_path = os.path.join("gs://", args.bucket, args.model_path, "model.tflite")
 
     with beam.Pipeline(options=beam_options) as p:
         # parse events from PubSub topic, add timestamp used in windowing functions, annotate with bounding boxes
@@ -254,10 +252,9 @@ if __name__ == "__main__":
             >> beam.Map(NestedTelemetryEvent.from_flatbuffer).with_output_types(
                 NestedTelemetryEvent
             )
-            | "With timestamps"
-            >> beam.Map(lambda x: beam.window.TimestampedValue(x, x.ts))
+            | "With timestamps" >> beam.Map(add_timestamp)
             | "Add Bounding Box Annotations"
-            >> beam.Map(lambda x: predict_bounding_boxes(x, model_path))
+            >> beam.ParDo(PredictBoundingBoxes(model_path))
         )
 
         # key by session id
@@ -285,23 +282,29 @@ if __name__ == "__main__":
             | "Filter area of interest and detections above threshold"
             >> beam.ParDo(
                 FilterAreaOfInterest(
-                    args.calibration_base_path,
+                    calibration_base_path,
                 )
             )
             | "Write annotated jpgs"
-            >> beam.ParDo(WriteAnnotatedImage(args.fixed_window_jpg_sink))
+            >> beam.ParDo(
+                WriteAnnotatedImage(
+                    args.fixed_window_jpg_sink,
+                    score_threshold=args.min_score_threshold,
+                    max_boxes_to_draw=args.max_boxes_to_draw,
+                )
+            )
         )
 
         _ = fixed_window_view_by_key | "Write FixedWindow TFRecords" >> beam.ParDo(
             WriteWindowedTFRecord(
-                args.fixed_window_tfrecord_sink,
+                fixed_window_tfrecord_sink,
                 NestedTelemetryEvent.tfrecord_schema(args.num_detections),
             )
         )
 
         _ = fixed_window_view_by_key | "Write FixedWindow Parquet" >> beam.ParDo(
             WriteWindowedParquet(
-                args.fixed_window_parquet_sink,
+                fixed_window_parquet_sink,
                 NestedTelemetryEvent.pyarrow_schema(args.num_detections),
             )
         )
@@ -336,9 +339,7 @@ if __name__ == "__main__":
             | "Drop image data" >> beam.Map(lambda v: v.drop_image_data())
             | "Group alert pipeline by session" >> beam.GroupBy("print_session")
             | "Filter detections below threshold & outside area of interest"
-            >> beam.ParDo(
-                FilterAreaOfInterest(args.calibration_base_path, score_threshold=0.5)
-            )
+            >> beam.ParDo(FilterAreaOfInterest(calibration_base_path))
             | beam.ParDo(ExplodeWindowedHealthRecord())
             | "Windowed health DataFrame" >> beam.GroupBy("print_session")
             | beam.ParDo(SortWindowedHealthDataframe())
@@ -383,8 +384,8 @@ if __name__ == "__main__":
             | "Should alert for session?" >> beam.GroupByKey()
             | beam.ParDo(
                 CreateVideoRenderMessage(
-                    args.fixed_window_jpg_sink,
-                    args.fixed_window_mp4_sink,
+                    fixed_window_jpg_sink,
+                    fixed_window_mp4_sink,
                     args.cdn_base_path,
                     args.cdn_upload_path,
                     args.bucket,
