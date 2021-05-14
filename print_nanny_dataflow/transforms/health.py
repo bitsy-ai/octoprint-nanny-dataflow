@@ -130,11 +130,9 @@ class FilterAreaOfInterest(beam.DoFn):
     def __init__(
         self,
         calibration_base_path: str,
-        score_threshold: float = 0.5,
         calibration_filename: str = "calibration.json",
     ):
         self.calibration_base_path = calibration_base_path
-        self.score_threshold = score_threshold
         self.calibration_filename = calibration_filename
 
     def load_calibration(

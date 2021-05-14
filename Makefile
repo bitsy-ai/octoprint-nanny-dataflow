@@ -73,6 +73,7 @@ dataflow: clean docker-image sdist
 	​--setup_file=$(PWD)/setup.py \
 	--staging_location=gs://$(BUCKET)/dataflow/staging \
 	--streaming \
+	--upgrade \
 	--max_num_workers=$(MAX_NUM_WORKERS) \
 	--bucket=$(BUCKET)
 

@@ -196,6 +196,10 @@ if __name__ == "__main__":
         default=256,
     )
 
+    parser.add_argument("--min-score-threshold", default=0.66)
+
+    parser.add_argument("--max-boxes-to-draw", default=5)
+
     parser.add_argument("--model-path", default="dataflow/models")
     parser.add_argument("--runner", default="DataflowRunner")
 
@@ -282,7 +286,13 @@ if __name__ == "__main__":
                 )
             )
             | "Write annotated jpgs"
-            >> beam.ParDo(WriteAnnotatedImage(args.fixed_window_jpg_sink))
+            >> beam.ParDo(
+                WriteAnnotatedImage(
+                    args.fixed_window_jpg_sink,
+                    score_threshold=args.min_score_threshold,
+                    max_boxes_to_draw=args.max_boxes_to_draw,
+                )
+            )
         )
 
         _ = fixed_window_view_by_key | "Write FixedWindow TFRecords" >> beam.ParDo(
@@ -329,9 +339,7 @@ if __name__ == "__main__":
             | "Drop image data" >> beam.Map(lambda v: v.drop_image_data())
             | "Group alert pipeline by session" >> beam.GroupBy("print_session")
             | "Filter detections below threshold & outside area of interest"
-            >> beam.ParDo(
-                FilterAreaOfInterest(calibration_base_path, score_threshold=0.5)
-            )
+            >> beam.ParDo(FilterAreaOfInterest(calibration_base_path))
             | beam.ParDo(ExplodeWindowedHealthRecord())
             | "Windowed health DataFrame" >> beam.GroupBy("print_session")
             | beam.ParDo(SortWindowedHealthDataframe())
