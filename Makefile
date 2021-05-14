@@ -10,6 +10,7 @@ JOB_NAME ?= "sliding-window-health"
 PIPELINE ?= "print_nanny_dataflow.pipelines.sliding_window_health"
 IMAGE ?= "gcr.io/${PROJECT}/print-nanny-dataflow:$(shell git rev-parse HEAD)"
 BUCKET ?= "print-nanny-sandbox"
+MAX_NUM_WORKERS ?= 2
 
 clean-build: ## remove build artifacts
 	rm -fr build/
@@ -70,9 +71,9 @@ dataflow: clean docker-image sdist
 	--temp_location=gs://$(BUCKET)/dataflow/tmp \
 	--job_name=$(JOB_NAME) \
 	​--setup_file=$(PWD)/setup.py \
-	--update \
 	--staging_location=gs://$(BUCKET)/dataflow/staging \
 	--streaming \
+	--max_num_workers=$(MAX_NUM_WORKERS) \
 	--bucket=$(BUCKET)
 
 # 	# --extra_package=dist/print-nanny-dataflow-0.1.0.tar.gz \
