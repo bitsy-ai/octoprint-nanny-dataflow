@@ -80,13 +80,8 @@ def predict_bounding_boxes(element: NestedTelemetryEvent, model_path: str):
 
 
 class PredictBoundingBoxes(beam.DoFn):
-    def __init__(self):
-        module_path = os.path.dirname(print_nanny_dataflow.__file__)
-        self.data_path = os.path.join(module_path, "data")
-        self.model_path = os.path.join(self.data_path, "model.tflite")
-        model_metadata_path = os.path.join(self.data_path, "tflite_metadata.json")
-        model_metadata = json.load(open(model_metadata_path, "r"))
-        input_shape = model_metadata["inputShape"]
+    def __init__(self, model_path):
+        self.model_path = model_path
 
     def process(
         self, element: NestedTelemetryEvent, *args, **kwargs

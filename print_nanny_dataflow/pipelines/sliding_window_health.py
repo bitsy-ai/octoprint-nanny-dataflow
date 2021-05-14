@@ -235,8 +235,8 @@ if __name__ == "__main__":
     )
 
     # load input shape from model metadata
-    model_path = os.path.join("gs://", args.model_path, "model.tflite")
-    model_metadata_path = os.path.join("gs://", args.model_path, "tflite_metadata.json")
+    model_path = os.path.join("gs://", args.bucket, args.model_path, "model.tflite")
+    model_metadata_path = os.path.join("gs://", args.bucket, args.model_path, "tflite_metadata.json")
     # any batch size
 
     with beam.Pipeline(options=beam_options) as p:
@@ -252,7 +252,8 @@ if __name__ == "__main__":
                 NestedTelemetryEvent
             )
             | "With timestamps" >> beam.Map(add_timestamp)
-            | "Add Bounding Box Annotations" >> beam.ParDo(PredictBoundingBoxes())
+            | "Add Bounding Box Annotations"
+            >> beam.ParDo(PredictBoundingBoxes(model_path))
         )
 
         # key by session id
