@@ -39,7 +39,8 @@ direct:
 	--api-url=$(PRINT_NANNY_API_URL) \
 	--api-token=$$PRINT_NANNY_API_TOKEN \
 	--direct_num_workers=12 \
-	--runtime_type_check
+	--runtime_type_check \
+	--bucket=$(BUCKET)
 
 portable: docker-image
 	$(PYTHON) -m $(PIPELINE) \
@@ -52,7 +53,8 @@ portable: docker-image
 	--environment_config=$(IMAGE) \
 	--sdk_location=container \
 	​--setup_file=setup.py \
-	--requirements_file=requirements.txt
+	--requirements_file=requirements.txt \
+	--bucket=$(BUCKET)
 
 sdist:
 	python setup.py sdist
@@ -72,7 +74,8 @@ dataflow: docker-image sdist
 	--staging_location=gs://$(BUCKET)/dataflow/staging \
 	--streaming \
 	--extra_package=dist/print-nanny-dataflow-0.1.0.tar.gz \
-	--save_main_session
+	--save_main_session \
+	--bucket=$(BUCKET)
 
 lint:
 	$(PYTHON) -m black setup.py print_nanny_dataflow conftest.py tests

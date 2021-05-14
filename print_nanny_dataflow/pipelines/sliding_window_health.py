@@ -236,7 +236,9 @@ if __name__ == "__main__":
 
     # load input shape from model metadata
     model_path = os.path.join("gs://", args.bucket, args.model_path, "model.tflite")
-    model_metadata_path = os.path.join("gs://", args.bucket, args.model_path, "tflite_metadata.json")
+    model_metadata_path = os.path.join(
+        "gs://", args.bucket, args.model_path, "tflite_metadata.json"
+    )
     # any batch size
 
     with beam.Pipeline(options=beam_options) as p:
