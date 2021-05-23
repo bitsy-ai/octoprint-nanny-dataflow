@@ -1,5 +1,5 @@
 
-.PHONY: local-dev dataflow-prod
+.PHONY: local-dev dataflow-prod docker-image
 
 PYTHON=.venv/bin/python
 PIP=.venv/bin/pip
@@ -8,7 +8,8 @@ PROJECT ?= "print-nanny-sandbox"
 PRINT_NANNY_API_URL ?= "http://localhost:8000/api"
 JOB_NAME ?= "sliding-window-health"
 PIPELINE ?= "print_nanny_dataflow.pipelines.sliding_window_health"
-IMAGE ?= "gcr.io/${PROJECT}/print-nanny-dataflow:$(shell git rev-parse HEAD)"
+GIT_SHA ?= $(shell git rev-parse HEAD)
+IMAGE ?= "gcr.io/${PROJECT}/print-nanny-dataflow:${GIT_SHA}"
 BUCKET ?= "print-nanny-sandbox"
 MAX_NUM_WORKERS ?= 2
 
@@ -30,8 +31,11 @@ clean-pyc: ## remove Python file artifacts
 
 clean: clean-dist clean-pyc clean-build
 
-docker-image:
+dist/$(GIT_SHA).image:dist/%.image:
 	gcloud builds submit --tag $(IMAGE)
+	touch dist/$(GIT_SHA).image
+
+docker-image: dist/$(GIT_SHA).image
 
 direct:
 	$(PYTHON) -m $(PIPELINE) \

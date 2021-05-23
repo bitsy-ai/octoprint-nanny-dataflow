@@ -239,156 +239,158 @@ if __name__ == "__main__":
 
     model_path = os.path.join("gs://", args.bucket, args.model_path, "model.tflite")
 
-    with beam.Pipeline(options=beam_options) as p:
-        # parse events from PubSub topic, add timestamp used in windowing functions, annotate with bounding boxes
-        parsed_dataset = (
-            p
-            | "Read TelemetryEvent"
-            >> beam.io.ReadFromPubSub(
-                topic=input_topic_path,
-            )
-            | "Deserialize Flatbuffer"
-            >> beam.Map(NestedTelemetryEvent.from_flatbuffer).with_output_types(
-                NestedTelemetryEvent
-            )
-            | "With timestamps" >> beam.Map(add_timestamp)
-            | "Add Bounding Box Annotations"
-            >> beam.ParDo(PredictBoundingBoxes(model_path))
-        )
+    p = beam.Pipeline(options=pipeline_options)
 
-        # key by session id
-        parsed_dataset_by_session = (
-            parsed_dataset
-            | "Key NestedTelemetryEvent by session id"
-            >> beam.Map(lambda x: (x.print_session, x))
+    # parse events from PubSub topic, add timestamp used in windowing functions, annotate with bounding boxes
+    parsed_dataset = (
+        p
+        | "Read TelemetryEvent"
+        >> beam.io.ReadFromPubSub(
+            topic=input_topic_path,
         )
-
-        fixed_window_view = (
-            parsed_dataset_by_session
-            | f"Add fixed window"
-            >> beam.WindowInto(
-                beam.transforms.window.FixedWindows(args.health_window_period)
-            )
+        | "Deserialize Flatbuffer"
+        >> beam.Map(NestedTelemetryEvent.from_flatbuffer).with_output_types(
+            NestedTelemetryEvent
         )
+        | "With timestamps" >> beam.Map(add_timestamp)
+        | "Add Bounding Box Annotations" >> beam.ParDo(PredictBoundingBoxes(model_path))
+    )
 
-        fixed_window_view_by_key = (
-            fixed_window_view
-            | "Group FixedWindow NestedTelemetryEvent by key" >> beam.GroupByKey()
+    # key by session id
+    parsed_dataset_by_session = (
+        parsed_dataset
+        | "Key NestedTelemetryEvent by session id"
+        >> beam.Map(lambda x: (x.print_session, x))
+    )
+
+    fixed_window_view = (
+        parsed_dataset_by_session
+        | f"Add fixed window"
+        >> beam.WindowInto(
+            beam.transforms.window.FixedWindows(args.health_window_period)
         )
+    )
 
-        _ = (
-            fixed_window_view_by_key
-            | "Filter area of interest and detections above threshold"
-            >> beam.ParDo(
-                FilterAreaOfInterest(
-                    calibration_base_path,
-                )
-            )
-            | "Write annotated jpgs"
-            >> beam.ParDo(
-                WriteAnnotatedImage(
-                    fixed_window_jpg_sink,
-                    score_threshold=args.min_score_threshold,
-                    max_boxes_to_draw=args.max_boxes_to_draw,
-                )
+    fixed_window_view_by_key = (
+        fixed_window_view
+        | "Group FixedWindow NestedTelemetryEvent by key" >> beam.GroupByKey()
+    )
+
+    _ = (
+        fixed_window_view_by_key
+        | "Filter area of interest and detections above threshold"
+        >> beam.ParDo(
+            FilterAreaOfInterest(
+                calibration_base_path,
             )
         )
-
-        _ = fixed_window_view_by_key | "Write FixedWindow TFRecords" >> beam.ParDo(
-            WriteWindowedTFRecord(
-                fixed_window_tfrecord_sink,
-                NestedTelemetryEvent.tfrecord_schema(args.num_detections),
+        | "Write annotated jpgs"
+        >> beam.ParDo(
+            WriteAnnotatedImage(
+                fixed_window_jpg_sink,
+                score_threshold=args.min_score_threshold,
+                max_boxes_to_draw=args.max_boxes_to_draw,
             )
         )
+    )
 
-        _ = fixed_window_view_by_key | "Write FixedWindow Parquet" >> beam.ParDo(
+    _ = fixed_window_view_by_key | "Write FixedWindow TFRecords" >> beam.ParDo(
+        WriteWindowedTFRecord(
+            fixed_window_tfrecord_sink,
+            NestedTelemetryEvent.tfrecord_schema(args.num_detections),
+        )
+    )
+
+    _ = fixed_window_view_by_key | "Write FixedWindow Parquet" >> beam.ParDo(
+        WriteWindowedParquet(
+            fixed_window_parquet_sink,
+            NestedTelemetryEvent.pyarrow_schema(args.num_detections),
+        )
+    )
+
+    sliding_window_view = parsed_dataset | "Add sliding window" >> beam.WindowInto(
+        beam.transforms.window.SlidingWindows(
+            args.health_window_size, args.health_window_period
+        ),
+        accumulation_mode=beam.transforms.trigger.AccumulationMode.ACCUMULATING,
+    )
+
+    _ = (
+        sliding_window_view
+        | "Write SlidingWindow ExplodeWindowedHealthRecord Parquet (unfilterd)"
+        >> beam.ParDo(ExplodeWindowedHealthRecord())
+        | "Group unfiltered health records by key" >> beam.GroupBy("print_session")
+        | "Write SlidingWindow Parquet"
+        >> beam.ParDo(
             WriteWindowedParquet(
-                fixed_window_parquet_sink,
-                NestedTelemetryEvent.pyarrow_schema(args.num_detections),
+                args.sliding_window_health_filtered_sink,
+                WindowedHealthRecord.pyarrow_schema(),
             )
         )
+    )
 
-        sliding_window_view = parsed_dataset | "Add sliding window" >> beam.WindowInto(
-            beam.transforms.window.SlidingWindows(
-                args.health_window_size, args.health_window_period
-            ),
-            accumulation_mode=beam.transforms.trigger.AccumulationMode.ACCUMULATING,
-        )
+    # @TODO enrich pcol with calibration as side input to avoid rdisk reload -> group -> transform -> regroup?
+    # This is implemented as a Singleton instance in Java, which can be shared across threads and used as a cache
+    # The Python implementation probably uses multiprocessing.shared_memory, which might actually be higher latency than hitting disk for most workloads?
 
-        _ = (
-            sliding_window_view
-            | "Write SlidingWindow ExplodeWindowedHealthRecord Parquet (unfilterd)"
-            >> beam.ParDo(ExplodeWindowedHealthRecord())
-            | "Group unfiltered health records by key" >> beam.GroupBy("print_session")
-            | "Write SlidingWindow Parquet"
-            >> beam.ParDo(
-                WriteWindowedParquet(
-                    args.sliding_window_health_filtered_sink,
-                    WindowedHealthRecord.pyarrow_schema(),
-                )
+    filtered_health_dataframe = (
+        sliding_window_view
+        | "Drop image data" >> beam.Map(lambda v: v.drop_image_data())
+        | "Group alert pipeline by session" >> beam.GroupBy("print_session")
+        | "Filter detections below threshold & outside area of interest"
+        >> beam.ParDo(FilterAreaOfInterest(calibration_base_path))
+        | beam.ParDo(ExplodeWindowedHealthRecord())
+        | "Windowed health DataFrame" >> beam.GroupBy("print_session")
+        | beam.ParDo(SortWindowedHealthDataframe())
+        | beam.GroupByKey()
+    )
+
+    _ = (
+        filtered_health_dataframe
+        | "Write SlidingWindow (calibration & threshold filtered) Parquet"
+        >> beam.ParDo(
+            WriteWindowedParquet(
+                args.sliding_window_health_raw_sink,
+                NestedWindowedHealthTrend.pyarrow_schema(),
             )
         )
+    )
 
-        # @TODO enrich pcol with calibration as side input to avoid rdisk reload -> group -> transform -> regroup?
-        # This is implemented as a Singleton instance in Java, which can be shared across threads and used as a cache
-        # The Python implementation probably uses multiprocessing.shared_memory, which might actually be higher latency than hitting disk for most workloads?
+    # TODO re-enable Afterwatermark triggers with MonitorHealthStateful
+    # alert_pipeline_trigger = AfterWatermark(
+    #     early=AfterProcessingTime(args.health_window_period), late=AfterCount(1)
+    # )
+    session_gap = args.health_window_period * 1.5
+    logging.info(f"Accumulating events with session gap={session_gap}")
 
-        filtered_health_dataframe = (
-            sliding_window_view
-            | "Drop image data" >> beam.Map(lambda v: v.drop_image_data())
-            | "Group alert pipeline by session" >> beam.GroupBy("print_session")
-            | "Filter detections below threshold & outside area of interest"
-            >> beam.ParDo(FilterAreaOfInterest(calibration_base_path))
-            | beam.ParDo(ExplodeWindowedHealthRecord())
-            | "Windowed health DataFrame" >> beam.GroupBy("print_session")
-            | beam.ParDo(SortWindowedHealthDataframe())
-            | beam.GroupByKey()
+    # accumulates failure count
+    session_accumulating_dataframe = (
+        # windowed_health_dataframe
+        parsed_dataset_by_session
+        # filtered_health_dataframe
+        | beam.WindowInto(
+            beam.transforms.window.Sessions(session_gap),
+            # TODO re-enable with MonitorHealthStateful
+            # trigger=alert_pipeline_trigger,
+            accumulation_mode=beam.transforms.trigger.AccumulationMode.DISCARDING,
         )
+        # | "Stateful health score threshold monitor"
+        # >> beam.ParDo(MonitorHealthStateful(output_topic_path))FW
+    )
 
-        _ = (
-            filtered_health_dataframe
-            | "Write SlidingWindow (calibration & threshold filtered) Parquet"
-            >> beam.ParDo(
-                WriteWindowedParquet(
-                    args.sliding_window_health_raw_sink,
-                    NestedWindowedHealthTrend.pyarrow_schema(),
-                )
+    on_session_end = (
+        session_accumulating_dataframe
+        | "Should alert for session?" >> beam.GroupByKey()
+        | beam.ParDo(
+            CreateVideoRenderMessage(
+                fixed_window_jpg_sink,
+                fixed_window_mp4_sink,
+                args.cdn_base_path,
+                args.cdn_upload_path,
+                args.bucket,
             )
         )
+        | "Write to PubSub" >> beam.io.WriteToPubSub(output_topic_path)
+    )
 
-        # TODO re-enable Afterwatermark triggers with MonitorHealthStateful
-        # alert_pipeline_trigger = AfterWatermark(
-        #     early=AfterProcessingTime(args.health_window_period), late=AfterCount(1)
-        # )
-        session_gap = args.health_window_period * 1.5
-        logging.info(f"Accumulating events with session gap={session_gap}")
-
-        # accumulates failure count
-        session_accumulating_dataframe = (
-            # windowed_health_dataframe
-            parsed_dataset_by_session
-            # filtered_health_dataframe
-            | beam.WindowInto(
-                beam.transforms.window.Sessions(session_gap),
-                # TODO re-enable with MonitorHealthStateful
-                # trigger=alert_pipeline_trigger,
-                accumulation_mode=beam.transforms.trigger.AccumulationMode.DISCARDING,
-            )
-            # | "Stateful health score threshold monitor"
-            # >> beam.ParDo(MonitorHealthStateful(output_topic_path))FW
-        )
-
-        on_session_end = (
-            session_accumulating_dataframe
-            | "Should alert for session?" >> beam.GroupByKey()
-            | beam.ParDo(
-                CreateVideoRenderMessage(
-                    fixed_window_jpg_sink,
-                    fixed_window_mp4_sink,
-                    args.cdn_base_path,
-                    args.cdn_upload_path,
-                    args.bucket,
-                )
-            )
-            | "Write to PubSub" >> beam.io.WriteToPubSub(output_topic_path)
-        )
+    p.run()
