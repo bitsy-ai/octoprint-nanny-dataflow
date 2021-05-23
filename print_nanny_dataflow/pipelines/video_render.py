@@ -85,21 +85,20 @@ if __name__ == "__main__":
         "projects", args.project, "topics", args.output_topic
     )
 
-    with beam.Pipeline(options=beam_options) as p:
-        # TODO adjust window triggers
-        alert_pipeline_trigger = AfterAny(
-            AfterCount(1), AfterWatermark(late=AfterCount(1))
+    p = beam.Pipeline(options=beam_options)
+    # TODO adjust window triggers
+    alert_pipeline_trigger = AfterAny(AfterCount(1), AfterWatermark(late=AfterCount(1)))
+    tmp_file_spec_by_session = (
+        p
+        | f"Read from {input_topic_path}"
+        >> beam.io.ReadFromPubSub(topic=input_topic_path)
+        | beam.WindowInto(
+            beam.transforms.window.Sessions(args.session_gap),
+            trigger=alert_pipeline_trigger,
+            accumulation_mode=beam.transforms.trigger.AccumulationMode.DISCARDING,
         )
-        tmp_file_spec_by_session = (
-            p
-            | f"Read from {input_topic_path}"
-            >> beam.io.ReadFromPubSub(topic=input_topic_path)
-            | beam.WindowInto(
-                beam.transforms.window.Sessions(args.session_gap),
-                trigger=alert_pipeline_trigger,
-                accumulation_mode=beam.transforms.trigger.AccumulationMode.DISCARDING,
-            )
-            | "Decode bytes" >> beam.Map(lambda b: RenderVideoMessage.from_bytes(b))
-            | "Run render_video.sh" >> beam.ParDo(RenderVideo())
-            | "Write to PubSub" >> beam.io.WriteToPubSub(output_topic_path)
-        )
+        | "Decode bytes" >> beam.Map(lambda b: RenderVideoMessage.from_bytes(b))
+        | "Run render_video.sh" >> beam.ParDo(RenderVideo())
+        | "Write to PubSub" >> beam.io.WriteToPubSub(output_topic_path)
+    )
+    p.run()
