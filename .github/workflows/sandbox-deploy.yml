@@ -37,10 +37,13 @@ jobs:
           pip install -r requirements.txt
       - name: Write deploy key
         run: echo $GCP_SERVICE_ACCOUNT_KEY > key.json
-      - name: Active Service Account
+      - name: Configue gcloud project
+        run: gcloud config set project $GCP_PROJECT
+      - name: Activate Service Account
         run: gcloud auth activate-service-account $GCP_SERVICE_ACCOUNT --key-file=key.json
       - name: Configure docker registry credentials
         run: gcloud auth configure-docker
+
       - name: Deploy pipelines
         run: |
           source .venv/bin/activate
