@@ -17,7 +17,6 @@ from apache_beam.options.pipeline_options import GoogleCloudOptions
 from apache_beam.options.pipeline_options import PipelineOptions
 
 from apache_beam.transforms import trigger
-from tensorflow_transform.tf_metadata import dataset_metadata
 
 from print_nanny_dataflow.transforms.io import (
     WriteWindowedTFRecord,
