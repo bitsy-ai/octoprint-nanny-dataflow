@@ -228,7 +228,7 @@ if __name__ == "__main__":
         "gs://", args.bucket, args.calibration_base_path
     )
 
-    beam_options = PipelineOptions(
+    pipeline_options = PipelineOptions(
         pipeline_args, streaming=True, runner=args.runner, project=args.project
     )
 
