@@ -8,6 +8,7 @@ import pandas as pd
 import tensorflow as tf
 import apache_beam as beam
 import subprocess
+from print_nanny_dataflow.metrics import timeit
 
 from apache_beam.io.gcp import gcsio
 
@@ -48,11 +49,11 @@ def health_score_trend_polynomial_v1(
 
 class PredictBoundingBoxes(beam.DoFn):
     def __init__(self, gcs_model_path):
+
         self.gcs_model_path = gcs_model_path
 
-    def process(
-        self, element: NestedTelemetryEvent, *args, **kwargs
-    ) -> Iterable[NestedTelemetryEvent]:
+    @timeit("print_health", "predict_bounding_boxes_time")
+    def process_timed(self, element: NestedTelemetryEvent) -> NestedTelemetryEvent:
         gcs = gcsio.GcsIO()
         with gcs.open(self.gcs_model_path) as f:
             tflite_interpreter = tf.lite.Interpreter(model_content=f.read())
@@ -86,7 +87,10 @@ class PredictBoundingBoxes(beam.DoFn):
         )
         defaults = element.to_dict()
         defaults.update(params)
-        yield NestedTelemetryEvent(**defaults)
+        return NestedTelemetryEvent(**defaults)
+
+    def process(self, element: NestedTelemetryEvent) -> Iterable[NestedTelemetryEvent]:
+        yield self.process_timed(element)
 
 
 class ExplodeWindowedHealthRecord(beam.DoFn):
