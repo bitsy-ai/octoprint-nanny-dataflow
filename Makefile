@@ -31,11 +31,8 @@ clean-pyc: ## remove Python file artifacts
 
 clean: clean-dist clean-pyc clean-build
 
-dist/$(GIT_SHA).image:dist/%.image:
-	gcloud builds submit --tag $(IMAGE)
-	touch dist/$(GIT_SHA).image
-
-docker-image: dist/$(GIT_SHA).image
+docker-image:
+	gcloud builds submit --tag $(IMAGE) --project $(PROJECT)
 
 direct:
 	$(PYTHON) -m $(PIPELINE) \
