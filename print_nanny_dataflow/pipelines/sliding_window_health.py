@@ -287,7 +287,7 @@ if __name__ == "__main__":
             | "Write annotated jpgs"
             >> beam.ParDo(
                 WriteAnnotatedImage(
-                    args.fixed_window_jpg_sink,
+                    fixed_window_jpg_sink,
                     score_threshold=args.min_score_threshold,
                     max_boxes_to_draw=args.max_boxes_to_draw,
                 )
