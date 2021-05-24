@@ -13,6 +13,7 @@ env:
   GCP_SERVICE_ACCOUNT:  ${{ secrets.SANDBOX_SERVICE_ACCOUNT }}
   GCP_PROJECT: print-nanny-sandbox
   DISCORD_WEBCOOK: ${{ secrets.PRINT_NANNY_DISCORD_DEPLOY_WEBHOOK }}
+  GOOGLE_APPLICATION_CREDENTIALS: key.json
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
   # This workflow contains a single job called "build"
