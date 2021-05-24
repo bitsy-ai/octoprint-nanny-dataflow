@@ -101,4 +101,6 @@ if __name__ == "__main__":
         | "Run render_video.sh" >> beam.ParDo(RenderVideo())
         | "Write to PubSub" >> beam.io.WriteToPubSub(output_topic_path)
     )
-    p.run()
+    result = p.run()
+    if args.runner == "DirectRunner":
+        result.wait_until_finish()
