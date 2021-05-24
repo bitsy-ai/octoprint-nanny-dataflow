@@ -16,8 +16,6 @@ from typing import List, Tuple, Any, Iterable, Generator, Coroutine, Optional, U
 from apache_beam.options.pipeline_options import GoogleCloudOptions
 from apache_beam.options.pipeline_options import PipelineOptions
 
-from apache_beam.transforms import trigger
-
 from print_nanny_dataflow.transforms.io import (
     WriteWindowedTFRecord,
     WriteWindowedParquet,
@@ -39,7 +37,8 @@ from print_nanny_dataflow.encoders.types import (
     NestedWindowedHealthTrend,
 )
 
-import print_nanny_dataflow
+from print_nanny_dataflow.metrics import FixedWindowMetricStart, FixedWindowMetricEnd
+
 from print_nanny_dataflow.clients.rest import RestAPIClient
 
 logger = logging.getLogger(__name__)
@@ -229,7 +228,10 @@ if __name__ == "__main__":
     )
 
     pipeline_options = PipelineOptions(
-        pipeline_args, streaming=True, runner=args.runner, project=args.project
+        pipeline_args,
+        streaming=True,
+        runner=args.runner,
+        project=args.project,
     )
 
     input_topic_path = os.path.join("projects", args.project, "topics", args.topic)
@@ -274,6 +276,12 @@ if __name__ == "__main__":
     fixed_window_view_by_key = (
         fixed_window_view
         | "Group FixedWindow NestedTelemetryEvent by key" >> beam.GroupByKey()
+    )
+
+    _ = (
+        fixed_window_view_by_key
+        | "Calculate metrics over fixed window intervals"
+        >> beam.ParDo(FixedWindowMetricStart(args.health_window_period, "print_health"))
     )
 
     _ = (
@@ -376,6 +384,10 @@ if __name__ == "__main__":
         )
         # | "Stateful health score threshold monitor"
         # >> beam.ParDo(MonitorHealthStateful(output_topic_path))FW
+    )
+
+    _ = session_accumulating_dataframe | beam.ParDo(
+        FixedWindowMetricEnd(args.health_window_period, "print_health")
     )
 
     on_session_end = (
