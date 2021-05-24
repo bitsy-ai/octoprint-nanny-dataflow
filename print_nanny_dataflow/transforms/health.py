@@ -8,7 +8,7 @@ import pandas as pd
 import tensorflow as tf
 import apache_beam as beam
 import subprocess
-from print_nanny_dataflow.metrics import timeit
+from print_nanny_dataflow.metrics import time_distribution
 
 from apache_beam.io.gcp import gcsio
 
@@ -52,7 +52,7 @@ class PredictBoundingBoxes(beam.DoFn):
 
         self.gcs_model_path = gcs_model_path
 
-    @timeit("print_health", "predict_bounding_boxes_time")
+    @time_distribution("print_health", "predict_bounding_boxes_elapsed")
     def process_timed(self, element: NestedTelemetryEvent) -> NestedTelemetryEvent:
         gcs = gcsio.GcsIO()
         with gcs.open(self.gcs_model_path) as f:
