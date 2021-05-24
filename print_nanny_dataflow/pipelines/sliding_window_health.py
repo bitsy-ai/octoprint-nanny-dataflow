@@ -201,6 +201,8 @@ if __name__ == "__main__":
     parser.add_argument("--model-path", default="dataflow/models")
     parser.add_argument("--runner", default="DataflowRunner")
 
+    parser.add_argument("--job_name")
+
     args, pipeline_args = parser.parse_known_args()
 
     logging.basicConfig(level=getattr(logging, args.loglevel))
@@ -228,7 +230,11 @@ if __name__ == "__main__":
     )
 
     pipeline_options = PipelineOptions(
-        pipeline_args, streaming=True, runner=args.runner, project=args.project
+        pipeline_args,
+        streaming=True,
+        runner=args.runner,
+        project=args.project,
+        job_name=args.job_name,
     )
 
     input_topic_path = os.path.join("projects", args.project, "topics", args.topic)
@@ -278,9 +284,7 @@ if __name__ == "__main__":
     _ = (
         fixed_window_view_by_key
         | "Calculate metrics over fixed window intervals"
-        >> beam.ParDo(
-            FixedWindowMetricStart(args.health_window_period, pipeline_options.job_name)
-        )
+        >> beam.ParDo(FixedWindowMetricStart(args.health_window_period, args.job_name))
     )
 
     _ = (
@@ -386,7 +390,7 @@ if __name__ == "__main__":
     )
 
     _ = session_accumulating_dataframe | beam.ParDo(
-        FixedWindowMetricEnd(args.health_window_period, pipeline_options.job_name)
+        FixedWindowMetricEnd(args.health_window_period, args.job_name)
     )
 
     on_session_end = (
