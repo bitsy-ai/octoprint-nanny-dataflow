@@ -386,13 +386,14 @@ if __name__ == "__main__":
         # >> beam.ParDo(MonitorHealthStateful(output_topic_path))FW
     )
 
-    _ = session_accumulating_dataframe | beam.ParDo(
-        FixedWindowMetricEnd(args.health_window_period, "print_health")
-    )
-
     on_session_end = (
         session_accumulating_dataframe
-        | "Should alert for session?" >> beam.GroupByKey()
+        | "Group session window trigger by key" >> beam.GroupByKey()
+        | beam.ParDo(FixedWindowMetricEnd(args.health_window_period, "print_health"))
+    )
+
+    _ = (
+        on_session_end
         | beam.ParDo(
             CreateVideoRenderMessage(
                 fixed_window_jpg_sink,
