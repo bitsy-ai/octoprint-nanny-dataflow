@@ -50,5 +50,6 @@ jobs:
           source .venv/bin/activate
           make dataflow PROJECT=print-nanny-sandbox PIPELINE=print_nanny_dataflow.pipelines.video_render JOB_NAME=video-render
       - name: Deploy Sliding Health Pipeline
+        run: |
           source .venv/bin/activate
           make dataflow PROJECT=print-nanny-sandbox PIPELINE=print_nanny_dataflow.pipelines.sliding_window_health JOB_NAME=sliding-window-health
