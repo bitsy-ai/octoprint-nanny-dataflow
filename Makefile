@@ -80,7 +80,8 @@ dataflow: clean docker-image sdist
 	--max_num_workers=$(MAX_NUM_WORKERS) \
 	--bucket=$(BUCKET) \
 	--extra_package=dist/print-nanny-dataflow-0.1.0.tar.gz \
-	--region=$(GCP_REGION)
+	--region=$(GCP_REGION) \
+	--save_main_session
 
 lint:
 	$(PYTHON) -m black setup.py print_nanny_dataflow conftest.py tests
