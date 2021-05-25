@@ -97,7 +97,7 @@ if __name__ == "__main__":
             trigger=alert_pipeline_trigger,
             accumulation_mode=beam.transforms.trigger.AccumulationMode.DISCARDING,
         )
-        | "Decode bytes" >> beam.Map(lambda b: RenderVideoMessage.from_bytes(b))
+        | "Decode bytes" >> beam.Map(RenderVideoMessage.from_bytes)
         | "Run render_video.sh" >> beam.ParDo(RenderVideo())
         | "Write to PubSub" >> beam.io.WriteToPubSub(output_topic_path)
     )
