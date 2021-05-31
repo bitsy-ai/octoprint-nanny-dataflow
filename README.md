@@ -48,3 +48,7 @@ $ make portable PIPELINE=print_nanny_dataflow.pipelines.sliding_window_health
 $ make dataflow PIPELINE=print_nanny_dataflow.pipelines.video_render
 $ make dataflow PIPELINE=print_nanny_dataflow.pipelines.sliding_window_health
 ```
+
+## Credits
+
+Google supported this work by providing Google Cloud credit
