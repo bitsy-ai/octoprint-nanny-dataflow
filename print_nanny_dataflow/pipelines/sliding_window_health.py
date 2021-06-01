@@ -84,12 +84,6 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--session-window-gap-size",
-        default="monitoring-frame-raw",
-        help="PubSub topic",
-    )
-
-    parser.add_argument(
         "--quiet",
         default=False,
         help="Enable quiet mode to only log results and supress alert sending",
@@ -181,12 +175,6 @@ if __name__ == "__main__":
         "--num-detections",
         default=40,
         help="Max number of bounding boxes output by nms operation",
-    )
-
-    parser.add_argument("--api-token", help="Print Nanny API token")
-
-    parser.add_argument(
-        "--api-url", default="https://print-nanny.com/api", help="Print Nanny API url"
     )
 
     parser.add_argument(
@@ -331,15 +319,11 @@ if __name__ == "__main__":
         | "Write SlidingWindow Parquet"
         >> beam.ParDo(
             WriteWindowedParquet(
-                args.sliding_window_health_filtered_sink,
+                args.sliding_window_health_raw_sink,
                 WindowedHealthRecord.pyarrow_schema(),
             )
         )
     )
-
-    # @TODO enrich pcol with calibration as side input to avoid rdisk reload -> group -> transform -> regroup?
-    # This is implemented as a Singleton instance in Java, which can be shared across threads and used as a cache
-    # The Python implementation probably uses multiprocessing.shared_memory, which might actually be higher latency than hitting disk for most workloads?
 
     filtered_health_dataframe = (
         sliding_window_view
@@ -358,52 +342,10 @@ if __name__ == "__main__":
         | "Write SlidingWindow (calibration & threshold filtered) Parquet"
         >> beam.ParDo(
             WriteWindowedParquet(
-                args.sliding_window_health_raw_sink,
+                args.sliding_window_health_filtered_sink,
                 NestedWindowedHealthTrend.pyarrow_schema(),
             )
         )
-    )
-
-    # TODO re-enable Afterwatermark triggers with MonitorHealthStateful
-    # alert_pipeline_trigger = AfterWatermark(
-    #     early=AfterProcessingTime(args.health_window_period), late=AfterCount(1)
-    # )
-    session_gap = args.health_window_period * 1.5
-    logging.info(f"Accumulating events with session gap={session_gap}")
-
-    # accumulates failure count
-    session_accumulating_dataframe = (
-        # windowed_health_dataframe
-        parsed_dataset_by_session
-        # filtered_health_dataframe
-        | beam.WindowInto(
-            beam.transforms.window.Sessions(session_gap),
-            # TODO re-enable with MonitorHealthStateful
-            # trigger=alert_pipeline_trigger,
-            accumulation_mode=beam.transforms.trigger.AccumulationMode.DISCARDING,
-        )
-        # | "Stateful health score threshold monitor"
-        # >> beam.ParDo(MonitorHealthStateful(output_topic_path))FW
-    )
-
-    on_session_end = (
-        session_accumulating_dataframe
-        | "Group session window trigger by key" >> beam.GroupByKey()
-        | beam.ParDo(FixedWindowMetricEnd(args.health_window_period, "print_health"))
-    )
-
-    _ = (
-        on_session_end
-        | beam.ParDo(
-            CreateVideoRenderMessage(
-                fixed_window_jpg_sink,
-                fixed_window_mp4_sink,
-                args.cdn_base_path,
-                args.cdn_upload_path,
-                args.bucket,
-            )
-        )
-        | "Write to PubSub" >> beam.io.WriteToPubSub(output_topic_path)
     )
 
     result = p.run()
