@@ -66,8 +66,6 @@ sdist:
 dataflow: clean docker-image sdist
 	$(PYTHON) -m $(PIPELINE) \
 	--runner DataflowRunner \
-	--api-url=$(PRINT_NANNY_API_URL) \
-	--api-token=$$PRINT_NANNY_API_TOKEN \
 	--project=$(PROJECT) \
 	--experiment=use_runner_v2 \
 	--sdk_container_image=$(IMAGE) \
