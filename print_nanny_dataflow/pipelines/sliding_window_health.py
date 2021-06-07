@@ -112,6 +112,12 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "--base-gcs-path",
+        default="dataflow/telemetry_event/",
+        help="Base path for telemetry & monitoring event sinks",
+    )
+
+    parser.add_argument(
         "--fixed-window-tfrecord-sink",
         default="dataflow/telemetry_event/fixed_window/NestedTelemetryEvent/tfrecords",
         help="Unfiltered NestedTelemetryEvent emitted from FixedWindow (single point in time)",
@@ -145,12 +151,6 @@ if __name__ == "__main__":
         "--sliding-window-health-filtered-sink",
         default="dataflow/telemetry_event/sliding_window/WindowedHealthRecord/filtered/parquet",
         help="Unfiltered WindowedHealthRecord emitted from SlidingWindow",
-    )
-
-    parser.add_argument(
-        "--session-window-health-trend-sink",
-        default="dataflow/telemetry_event/session_window/NestedWindowedHealthTrend/parquet",
-        help="Post-filtered WindowedHelathDataframe emitted from session window",
     )
 
     parser.add_argument(
@@ -292,7 +292,7 @@ if __name__ == "__main__":
 
     _ = fixed_window_view_by_key | "Write FixedWindow TFRecords" >> beam.ParDo(
         WriteWindowedTFRecord(
-            fixed_window_tfrecord_sink,
+            args.base_gcs_path,
             NestedTelemetryEvent.tfrecord_schema(args.num_detections),
         )
     )

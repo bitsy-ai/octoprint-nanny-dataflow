@@ -17,9 +17,34 @@ logger = logging.getLogger(__name__)
 class WriteWindowedTFRecord(beam.DoFn):
     """Output one TFRecord file per window per key"""
 
-    def __init__(self, base_path: str, schema: schema_pb2.Schema):
+    def __init__(
+        self, base_path: str, schema: schema_pb2.Schema, record_type: str = "tfrecord"
+    ):
         self.base_path = base_path
         self.schema = schema
+        self.record_type = record_type
+
+    def outpath(
+        self, key: str, classname: str, window_start: int, window_end: int
+    ) -> str:
+        """
+        Constructs output path from parts:
+
+        base_path: gs://bucket-name/dataflow/base/path/to/sinks/
+        key: session
+        classname: NestedTelemetryEvent
+        suffix: tfrecords
+
+        Results in:
+        gs://bucket-name/dataflow/base/path/to/sinks/<session>/<classname>/tfrecords/
+        """
+        return os.path.join(
+            self.base_path,
+            key,
+            classname,
+            self.record_type,
+            f"{window_start}_{window_end}",
+        )
 
     def process(
         self,
@@ -27,11 +52,13 @@ class WriteWindowedTFRecord(beam.DoFn):
         window=beam.DoFn.WindowParam,
     ) -> Iterable[Iterable[str]]:
         key, elements = keyed_elements
+
+        element_cls = elements[0].__class__
         window_start = int(window.start)
         window_end = int(window.end)
+        output = self.outpath(key, element_cls, window_start, window_end)
 
         coder = ExampleProtoEncoder(self.schema)
-        output = os.path.join(self.base_path, key, f"{window_start}_{window_end}")
         logger.info(f"Writing {output} with coder {coder}")
 
         yield (
