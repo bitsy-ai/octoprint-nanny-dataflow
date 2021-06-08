@@ -33,11 +33,13 @@ class WriteAnnotatedImage(beam.DoFn):
         category_index=CATEGORY_INDEX,
         score_threshold=0.5,
         max_boxes_to_draw=10,
+        record_type="jpg",
     ):
         self.category_index = category_index
         self.score_threshold = score_threshold
         self.max_boxes_to_draw = max_boxes_to_draw
         self.base_path = base_path
+        self.record_type = record_type
 
     def annotate_image(self, event: NestedTelemetryEvent) -> bytes:
         image_np = np.array(PIL.Image.open(io.BytesIO(event.image_data)))
@@ -75,13 +77,18 @@ class WriteAnnotatedImage(beam.DoFn):
         image.save(buffer, format="JPEG")
         return buffer.getvalue()
 
+    def outpath(self, key: str, classname: str, ts: float):
+        return os.path.join(
+            self.base_path, key, classname, self.record_type, f"{ts}.jpg"
+        )
+
     def process(
         self,
         element: NestedTelemetryEvent,
         window=beam.DoFn.WindowParam,
     ) -> Iterable[Tuple[str, str]]:
-        outpath = os.path.join(
-            self.base_path, element.print_session, f"{element.ts}.jpg"
+        outpath = self.outpath(
+            self.base_path, element.print_session, element.__class__, element.ts
         )
         img = self.annotate_image(element)
         gcs_client = beam.io.gcp.gcsio.GcsIO()

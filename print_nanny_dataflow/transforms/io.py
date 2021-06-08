@@ -41,7 +41,6 @@ class WriteWindowedTFRecord(beam.DoFn):
         return os.path.join(
             self.base_path,
             key,
-            classname,
             self.record_type,
             f"{window_start}_{window_end}",
         )
@@ -53,10 +52,9 @@ class WriteWindowedTFRecord(beam.DoFn):
     ) -> Iterable[Iterable[str]]:
         key, elements = keyed_elements
 
-        element_cls = elements[0].__class__
         window_start = int(window.start)
         window_end = int(window.end)
-        output = self.outpath(key, element_cls, window_start, window_end)
+        output = self.outpath(key, window_start, window_end)
 
         coder = ExampleProtoEncoder(self.schema)
         logger.info(f"Writing {output} with coder {coder}")
@@ -83,9 +81,19 @@ SERIALIZE_FNS = {
 
 
 class WriteWindowedParquet(beam.DoFn):
-    def __init__(self, base_path: str, schema):
+    def __init__(self, base_path: str, schema, record_type="parquet"):
         self.base_path = base_path
         self.schema = schema
+        self.record_type = record_type
+
+    def outpath(self, key: str, classname: str, window_start: int, window_end: int):
+        return os.path.join(
+            self.base_path,
+            key,
+            classname,
+            self.record_type,
+            f"{window_start}_{window_end}.parquet",
+        )
 
     def process(
         self,
@@ -96,8 +104,8 @@ class WriteWindowedParquet(beam.DoFn):
         window_start = int(window.start)
         window_end = int(window.end)
 
-        output_path = os.path.join(
-            self.base_path, key, f"{window_start}_{window_end}.parquet"
+        output_path = self.outpath(
+            key, elements[0].__class__, window_start=window_start, window_end=window_end
         )
         # @todo apache-beam == 2.28
         # Transforms in beam.io.parquetio only operate on dict representations of data

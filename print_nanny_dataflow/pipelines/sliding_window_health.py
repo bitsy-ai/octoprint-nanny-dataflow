@@ -193,24 +193,6 @@ if __name__ == "__main__":
 
     logging.basicConfig(level=getattr(logging, args.loglevel))
 
-    fixed_window_tfrecord_sink = os.path.join(
-        "gs://", args.bucket, args.fixed_window_tfrecord_sink
-    )
-    fixed_window_parquet_sink = os.path.join(
-        "gs://", args.bucket, args.fixed_window_parquet_sink
-    )
-    fixed_window_jpg_sink = os.path.join(
-        "gs://", args.bucket, args.fixed_window_jpg_sink
-    )
-    fixed_window_mp4_sink = os.path.join(
-        "gs://", args.bucket, args.fixed_window_mp4_sink
-    )
-    sliding_window_health_raw_sink = os.path.join(
-        "gs://", args.bucket, args.sliding_window_health_raw_sink
-    )
-    sliding_window_health_filtered_sink = os.path.join(
-        "gs://", args.bucket, args.sliding_window_health_filtered_sink
-    )
     calibration_base_path = os.path.join(
         "gs://", args.bucket, args.calibration_base_path
     )
@@ -283,9 +265,10 @@ if __name__ == "__main__":
         | "Write annotated jpgs"
         >> beam.ParDo(
             WriteAnnotatedImage(
-                fixed_window_jpg_sink,
+                args.base_gcs_path,
                 score_threshold=args.min_score_threshold,
                 max_boxes_to_draw=args.max_boxes_to_draw,
+                record_type="NestedTelemetryEvent/jpg",
             )
         )
     )
@@ -299,8 +282,9 @@ if __name__ == "__main__":
 
     _ = fixed_window_view_by_key | "Write FixedWindow Parquet" >> beam.ParDo(
         WriteWindowedParquet(
-            fixed_window_parquet_sink,
+            args.base_gcs_path,
             NestedTelemetryEvent.pyarrow_schema(args.num_detections),
+            record_type="NestedTelemetryEvent/parquet",
         )
     )
 
@@ -319,8 +303,9 @@ if __name__ == "__main__":
         | "Write SlidingWindow Parquet"
         >> beam.ParDo(
             WriteWindowedParquet(
-                args.sliding_window_health_raw_sink,
+                args.base_gcs_path,
                 WindowedHealthRecord.pyarrow_schema(),
+                record_type="WindowedHealthRecord/parquet",
             )
         )
     )
@@ -342,8 +327,9 @@ if __name__ == "__main__":
         | "Write SlidingWindow (calibration & threshold filtered) Parquet"
         >> beam.ParDo(
             WriteWindowedParquet(
-                args.sliding_window_health_filtered_sink,
+                args.base_gcs_path,
                 NestedWindowedHealthTrend.pyarrow_schema(),
+                record_type="NestedWindowedHealthTrend/parquet",
             )
         )
     )
