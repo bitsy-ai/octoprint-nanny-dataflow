@@ -1,7 +1,7 @@
 from __future__ import annotations
 import json
 from enum import Enum
-from typing import Tuple, Dict, Any, NamedTuple, TypeVar, Generic
+from typing import Tuple, Dict, Any, NamedTuple, TypeVar, Generic, Optional
 import pandas as pd
 import numpy as np
 import nptyping as npt
@@ -48,8 +48,8 @@ class Metadata(NamedTuple):
     user_id: int
     octoprint_device_id: int
     cloudiot_device_id: int
-    window_start: int = None
-    window_end: int = None
+    window_start: Optional[int] = None
+    window_end: Optional[int] = None
 
     def to_dict(self):
         return self._asdict()
@@ -208,7 +208,7 @@ class WindowedHealthDataFrameRow(NamedTuple):
     detection_class: npt.Int32
     detection_score: npt.Float32
 
-    def to_dict():
+    def to_dict(self):
         return self._asdict()
 
     @staticmethod
@@ -333,20 +333,20 @@ class WindowedHealthRecord(NamedTuple):
 
 class DeviceCalibration(NamedTuple):
     coordinates: npt.NDArray[npt.Float32]
-    mask = npt.NDArray[npt.Bool]
-    fpm = int
+    mask: npt.NDArray[npt.Bool]
+    fpm: int
 
     def filter_event(
         self, event: "NestedTelemetryEvent", min_overlap_area: float = 0.75
     ):
-        percent_intersection = self.percent_intersection(self.coordinates)
+        percent_intersection = event.percent_intersection(self.coordinates)
         ignored_mask = percent_intersection <= min_overlap_area
 
-        detection_boxes = self.detection_boxes()
+        detection_boxes = event.detection_boxes
         included_mask = np.invert(ignored_mask)
         detection_boxes = np.squeeze(detection_boxes[included_mask])
-        detection_scores = np.squeeze(self.detection_scores[included_mask])
-        detection_classes = np.squeeze(self.detection_classes[included_mask])
+        detection_scores = np.squeeze(event.detection_scores[included_mask])
+        detection_classes = np.squeeze(event.detection_classes[included_mask])
 
         num_detections = int(np.count_nonzero(included_mask))
 
@@ -360,11 +360,11 @@ class DeviceCalibration(NamedTuple):
             "num_detections",
         ]
         default_fieldset = {
-            k: v for k, v in self.to_dict().items() if k not in filter_fields
+            k: v for k, v in event.to_dict().items() if k not in filter_fields
         }
         boxes_ymin, boxes_xmin, boxes_ymax, boxes_xmax = detection_boxes.T
 
-        _kwargs = self.to_dict()
+        _kwargs = event.to_dict()
         _kwargs.update(
             dict(
                 detection_scores=detection_scores,
@@ -411,10 +411,10 @@ class NestedTelemetryEvent(NamedTuple):
     # Image
     image_width: npt.Float32
     image_height: npt.Float32
-    image_data: bytes = None
-    image_tensor: tf.Tensor = None
-    calibration: DeviceCalibration = None
-    annotated_image_data: bytes = None
+    image_data: Optional[bytes] = None
+    image_tensor: Optional[tf.Tensor] = None
+    calibration: Optional[DeviceCalibration] = None
+    annotated_image_data: Optional[bytes] = None
 
     @staticmethod
     def pyarrow_schema(num_detections):
@@ -473,22 +473,22 @@ class NestedTelemetryEvent(NamedTuple):
 
         obj = MonitoringEvent.MonitoringEvent.GetRootAsMonitoringEvent(input_bytes, 0)
 
-        scores = []
-        num_detections = []
-        classes = []
-        boxes_ymin = []
-        boxes_xmin = []
-        boxes_ymax = []
-        boxes_xmax = []
-
         if obj.BoundingBoxes() is not None:
             scores = obj.BoundingBoxes().DetectionScores()
             classes = obj.BoundingBoxes().DetectionClasses()
             num_detections = obj.BoundingBoxes().NumDetections()
             boxes_ymin, boxes_xmin, boxes_ymax, boxes_xmax = [
-                np.array([b.Ymin(), b.Xmin(), x.Ymax(), b.Xmax()])
+                np.array([b.Ymin(), b.Xmin(), b.Ymax(), b.Xmax()])
                 for b in obj.BoundingBoxes()
             ]
+        else:
+            num_detections = 0
+            classes = np.array([], dtype=np.int32)
+            scores = np.array([], dtype=np.float32)
+            boxes_ymin = np.array([], dtype=np.float32)
+            boxes_xmin = np.array([], dtype=np.float32)
+            boxes_ymax = np.array([], dtype=np.float32)
+            boxes_xmax = np.array([], dtype=np.float32)
 
         image_data = obj.Image().DataAsNumpy().tobytes()
         session = obj.Metadata().PrintSession().decode("utf-8")
@@ -522,31 +522,6 @@ class NestedTelemetryEvent(NamedTuple):
     def to_dataframe(self) -> pd.DataFrame:
         return pd.DataFrame(self.to_dict())
 
-    def flatten(self):
-        array_fields = [
-            "detection_scores",
-            "detection_classes",
-            "boxes_ymin",
-            "boxes_xmin",
-            "boxes_ymax",
-            "boxes_xmax",
-        ]
-        default_fieldset = {
-            k: v for k, v in self.to_dict().items() if k not in array_fields
-        }
-        return (
-            FlatTelemetryEvent(
-                **default_fieldset,
-                detection_class=self.detection_classes[i],
-                detection_score=self.detection_scores[i],
-                box_xmin=self.boxes_xmin[i],
-                box_ymin=self.boxes_ymin[i],
-                box_ymax=self.boxes_ymax[i],
-                box_xmax=self.boxes_xmax[i]
-            )
-            for i in range(0, self.num_detections)
-        )
-
     def drop_image_data(self):
         exclude = ["image_data", "image_tensor"]
         fieldset = self.to_dict()
@@ -571,26 +546,25 @@ class NestedTelemetryEvent(NamedTuple):
             if k not in masked_fields and k not in ignored_fields
         }
         if np.count_nonzero(mask) == 0:
-            masked_fields = {
+            masked_fields_map = {
                 k: np.array([])
                 for k, v in fieldset.items()
                 if k in masked_fields and k not in ignored_fields
             }
         else:
-            masked_fields = {
+            masked_fields_map = {
                 k: v[mask]
                 for k, v in fieldset.items()
                 if k in masked_fields and k not in ignored_fields
             }
-        return self.__class__(
-            **default_fieldset, **masked_fields, num_detections=np.count_nonzero(mask)
-        )
+        default_fieldset.update(masked_fields_map)
+        return self.__class__(**default_fieldset, num_detections=np.count_nonzero(mask))
 
-    def percent_intersection(self, aoi_coords: Tuple[float]):
+    def percent_intersection(self, aoi_coords: Tuple[float, float, float, float]):
         """
         Returns intersection-over-union area, normalized between 0 and 1
         """
-        detection_boxes = self.detection_boxes()
+        detection_boxes = self.detection_boxes
 
         # initialize array of zeroes
         aou = np.zeros(len(detection_boxes))
@@ -624,6 +598,7 @@ class NestedTelemetryEvent(NamedTuple):
 
         return aou
 
+    @property
     def detection_boxes(self):
         return np.array(
             [self.boxes_ymin, self.boxes_xmin, self.boxes_ymax, self.boxes_xmax]

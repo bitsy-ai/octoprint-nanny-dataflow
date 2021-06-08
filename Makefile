@@ -14,6 +14,9 @@ BUCKET ?= "print-nanny-sandbox"
 MAX_NUM_WORKERS ?= 2
 GCP_REGION ?= "us-central1"
 
+mypy:
+	mypy print_nanny_dataflow/
+
 clean-build: ## remove build artifacts
 	rm -fr build/
 	rm -fr dist/

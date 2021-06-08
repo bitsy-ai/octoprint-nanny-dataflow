@@ -42,8 +42,12 @@ class WriteAnnotatedImage(beam.DoFn):
         self.record_type = record_type
 
     def annotate_image(self, event: NestedTelemetryEvent) -> bytes:
-        image_np = np.array(PIL.Image.open(io.BytesIO(event.image_data)))
-
+        if event.image_data:
+            image_np = np.array(PIL.Image.open(io.BytesIO(event.image_data)))
+        else:
+            raise ValueError(
+                f"Expecented NestedTelemetryEvent().image_data to be bytes, received None"
+            )
         if event.calibration is None:
             annotated_image_data = visualize_boxes_and_labels_on_image_array(
                 image_np,
@@ -87,9 +91,7 @@ class WriteAnnotatedImage(beam.DoFn):
         element: NestedTelemetryEvent,
         window=beam.DoFn.WindowParam,
     ) -> Iterable[Tuple[str, str]]:
-        outpath = self.outpath(
-            self.base_path, element.print_session, element.__class__, element.ts
-        )
+        outpath = self.outpath(self.base_path, element.print_session, element.ts)
         img = self.annotate_image(element)
         gcs_client = beam.io.gcp.gcsio.GcsIO()
 

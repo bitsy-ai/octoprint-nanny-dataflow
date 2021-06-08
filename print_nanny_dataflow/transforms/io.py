@@ -24,9 +24,7 @@ class WriteWindowedTFRecord(beam.DoFn):
         self.schema = schema
         self.record_type = record_type
 
-    def outpath(
-        self, key: str, classname: str, window_start: int, window_end: int
-    ) -> str:
+    def outpath(self, key: str, window_start: int, window_end: int) -> str:
         """
         Constructs output path from parts:
 
@@ -86,11 +84,10 @@ class WriteWindowedParquet(beam.DoFn):
         self.schema = schema
         self.record_type = record_type
 
-    def outpath(self, key: str, classname: str, window_start: int, window_end: int):
+    def outpath(self, key: str, window_start: int, window_end: int):
         return os.path.join(
             self.base_path,
             key,
-            classname,
             self.record_type,
             f"{window_start}_{window_end}.parquet",
         )
@@ -105,7 +102,7 @@ class WriteWindowedParquet(beam.DoFn):
         window_end = int(window.end)
 
         output_path = self.outpath(
-            key, elements[0].__class__, window_start=window_start, window_end=window_end
+            key, window_start=window_start, window_end=window_end
         )
         # @todo apache-beam == 2.28
         # Transforms in beam.io.parquetio only operate on dict representations of data
