@@ -3,7 +3,7 @@ from typing import Iterable
 
 def windows_by_interval(
     window_size: int, window_period: int, window_cursor: int
-) -> Iterable[str]:
+) -> Iterable[int]:
     """
     Outputs filenames for each window, looking back window_size from window_cursor
     """

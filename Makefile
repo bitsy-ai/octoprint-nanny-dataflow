@@ -14,6 +14,9 @@ BUCKET ?= "print-nanny-sandbox"
 MAX_NUM_WORKERS ?= 2
 GCP_REGION ?= "us-central1"
 
+mypy:
+	mypy print_nanny_dataflow/
+
 clean-build: ## remove build artifacts
 	rm -fr build/
 	rm -fr dist/
@@ -74,7 +77,6 @@ dataflow: clean docker-image sdist
 	​--setup_file=$(PWD)/setup.py \
 	--staging_location=gs://$(BUCKET)/dataflow/staging \
 	--streaming \
-	--update \
 	--max_num_workers=$(MAX_NUM_WORKERS) \
 	--bucket=$(BUCKET) \
 	--extra_package=dist/print-nanny-dataflow-0.1.0.tar.gz \
