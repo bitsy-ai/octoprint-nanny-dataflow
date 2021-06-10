@@ -96,16 +96,6 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--cdn-base-path",
-        default="media",
-    )
-
-    parser.add_argument(
-        "--cdn-upload-path",
-        default="uploads/PrintSessionAlert",
-    )
-
-    parser.add_argument(
         "--render-video-topic",
         default="monitoring-video-render",
         help="Video rendering and alert push jobs will be published to this PubSub topic",
@@ -115,42 +105,6 @@ if __name__ == "__main__":
         "--base-gcs-path",
         default="dataflow/telemetry_event/",
         help="Base path for telemetry & monitoring event sinks",
-    )
-
-    parser.add_argument(
-        "--fixed-window-tfrecord-sink",
-        default="dataflow/telemetry_event/fixed_window/NestedTelemetryEvent/tfrecords",
-        help="Unfiltered NestedTelemetryEvent emitted from FixedWindow (single point in time)",
-    )
-
-    parser.add_argument(
-        "--fixed-window-parquet-sink",
-        default="dataflow/telemetry_event/fixed_window/NestedTelemetryEvent/parquet",
-        help="Unfiltered NestedTelemetryEvent emitted from FixedWindow (single point in time)",
-    )
-
-    parser.add_argument(
-        "--fixed-window-jpg-sink",
-        default="dataflow/telemetry_event/fixed_window/NestedTelemetryEvent/jpg",
-        help="Bounding-box annotated images (single point in time)",
-    )
-
-    parser.add_argument(
-        "--fixed-window-mp4-sink",
-        default="dataflow/telemetry_event/fixed_window/NestedTelemetryEvent/mp4",
-        help="Bounding-box annotated video (single point in time)",
-    )
-
-    parser.add_argument(
-        "--sliding-window-health-raw-sink",
-        default="dataflow/telemetry_event/sliding_window/WindowedHealthRecord/parquet",
-        help="Unfiltered WindowedHealthRecord emitted from SlidingWindow",
-    )
-
-    parser.add_argument(
-        "--sliding-window-health-filtered-sink",
-        default="dataflow/telemetry_event/sliding_window/WindowedHealthRecord/filtered/parquet",
-        help="Unfiltered WindowedHealthRecord emitted from SlidingWindow",
     )
 
     parser.add_argument(
