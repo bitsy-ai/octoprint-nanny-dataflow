@@ -44,6 +44,33 @@ if __name__ == "__main__":
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     parser.add_argument("--loglevel", default="INFO")
+
+    parser.add_argument(
+        "--input-path",
+        default="dataflow/telemetry_event/{session}/NestedTelemetryEvent/jpg",
+    )
+
+    parser.add_argument(
+        "--output-path",
+        default="dataflow/telemetry_event/{session}/NestedTelemetryEvent/jpg",
+    )
+
+    parser.add_argument(
+        "--bucket",
+        default="print-nanny-sandbox",
+        help="GCS Bucket",
+    )
+
+    parser.add_argument(
+        "--cdn-base-path",
+        default="media",
+    )
+
+    parser.add_argument(
+        "--cdn-upload-path",
+        default="uploads/PrintSessionAlert",
+    )
+
     parser.add_argument(
         "--input-topic",
         default="monitoring-video-render",

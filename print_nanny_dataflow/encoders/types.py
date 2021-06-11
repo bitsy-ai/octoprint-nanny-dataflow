@@ -12,10 +12,8 @@ from tensorflow_transform.tf_metadata import schema_utils
 from tensorflow_transform.tf_metadata import dataset_metadata
 from tensorflow_metadata.proto.v0 import schema_pb2
 
-from apache_beam.pvalue import PCollection
 import pyarrow as pa
 
-import print_nanny_client
 from print_nanny_client.flatbuffers.alert import (
     Alert,
     AnnotatedVideo,
