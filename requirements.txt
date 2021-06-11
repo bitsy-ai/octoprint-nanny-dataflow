@@ -15,7 +15,7 @@ aiohttp==3.7.4.post0
     # via
     #   gcsfs
     #   print-nanny-client
-apache-beam[gcp]==2.29.0
+apache-beam[gcp]==2.30.0
     # via
     #   print-nanny-dataflow (setup.py)
     #   tensorflow-transform
@@ -52,19 +52,19 @@ docopt==0.6.2
     # via hdfs
 fastavro==1.4.1
     # via apache-beam
-fasteners==0.16
+fasteners==0.16.2
     # via google-apitools
 flatbuffers==1.12
     # via tensorflow
-fsspec==2021.05.0
+fsspec==2021.06.0
     # via gcsfs
 future==0.18.2
     # via apache-beam
 gast==0.4.0
     # via tensorflow
-gcsfs==2021.5.0
+gcsfs==2021.6.0
     # via print-nanny-dataflow (setup.py)
-google-api-core[grpc,grpcgcp]==1.28.0
+google-api-core[grpc,grpcgcp]==1.30.0
     # via
     #   google-api-python-client
     #   google-cloud-bigquery
@@ -87,7 +87,7 @@ google-auth-oauthlib==0.4.4
     # via
     #   gcsfs
     #   tensorboard
-google-auth==1.30.1
+google-auth==1.31.0
     # via
     #   apache-beam
     #   gcsfs
@@ -97,7 +97,7 @@ google-auth==1.30.1
     #   google-auth-oauthlib
     #   google-cloud-core
     #   tensorboard
-google-cloud-bigquery==1.28.0
+google-cloud-bigquery==2.20.0
     # via apache-beam
 google-cloud-bigtable==1.7.0
     # via apache-beam
@@ -156,7 +156,7 @@ h5py==3.1.0
     # via tensorflow
 hdfs==2.6.0
     # via apache-beam
-httplib2==0.17.4
+httplib2==0.19.1
     # via
     #   apache-beam
     #   google-api-python-client
@@ -197,25 +197,31 @@ oauth2client==4.1.3
     # via
     #   apache-beam
     #   google-apitools
-oauthlib==3.1.0
+oauthlib==3.1.1
     # via requests-oauthlib
 opt-einsum==3.3.0
     # via tensorflow
 packaging==20.9
-    # via google-api-core
+    # via
+    #   google-api-core
+    #   google-cloud-bigquery
 pandas==1.2.4
     # via
     #   print-nanny-dataflow (setup.py)
     #   tfx-bsl
 pillow==8.2.0
     # via print-nanny-dataflow (setup.py)
-print-nanny-client==0.6.5rc24
+print-nanny-client==0.7.0.dev4
     # via print-nanny-dataflow (setup.py)
-protobuf==3.17.1
+proto-plus==1.18.1
+    # via google-cloud-bigquery
+protobuf==3.17.3
     # via
     #   apache-beam
     #   google-api-core
+    #   google-cloud-bigquery
     #   googleapis-common-protos
+    #   proto-plus
     #   tensorboard
     #   tensorflow
     #   tensorflow-metadata
@@ -247,6 +253,7 @@ pymongo==3.11.4
     # via apache-beam
 pyparsing==2.4.7
     # via
+    #   httplib2
     #   packaging
     #   pydot
 python-dateutil==2.8.1
@@ -266,6 +273,7 @@ requests==2.25.1
     #   apache-beam
     #   gcsfs
     #   google-api-core
+    #   google-cloud-bigquery
     #   hdfs
     #   requests-oauthlib
     #   tensorboard
@@ -283,7 +291,6 @@ six==1.15.0
     #   google-apitools
     #   google-auth
     #   google-auth-httplib2
-    #   google-cloud-bigquery
     #   google-cloud-core
     #   google-pasta
     #   google-resumable-media
