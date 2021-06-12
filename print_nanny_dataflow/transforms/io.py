@@ -9,7 +9,7 @@ import apache_beam as beam
 
 from tensorflow_metadata.proto.v0 import schema_pb2
 from apache_beam.pvalue import PCollection
-from print_nanny_dataflow.encoders.tfrecord_example import ExampleProtoEncoder
+from print_nanny_dataflow.coders.tfrecord_example import ExampleProtoEncoder
 
 logger = logging.getLogger(__name__)
 

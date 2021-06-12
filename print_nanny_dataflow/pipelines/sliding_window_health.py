@@ -30,7 +30,7 @@ from print_nanny_dataflow.transforms.health import (
 
 from print_nanny_dataflow.transforms.video import WriteAnnotatedImage
 
-from print_nanny_dataflow.encoders.types import (
+from print_nanny_dataflow.coders.types import (
     NestedTelemetryEvent,
     WindowedHealthRecord,
     DeviceCalibration,
@@ -121,7 +121,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--health-window-period",
-        default=60,
+        default=30,
         help="Size of sliding event window slices (in seconds)",
     )
 
@@ -129,11 +129,6 @@ if __name__ == "__main__":
         "--num-detections",
         default=40,
         help="Max number of bounding boxes output by nms operation",
-    )
-
-    parser.add_argument(
-        "--batch-size",
-        default=256,
     )
 
     parser.add_argument("--min-score-threshold", default=0.66)

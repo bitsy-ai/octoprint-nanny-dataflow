@@ -14,7 +14,7 @@ from print_nanny_dataflow.metrics import time_distribution
 
 from apache_beam.io.gcp import gcsio
 
-from print_nanny_dataflow.encoders.types import (
+from print_nanny_dataflow.coders.types import (
     NestedTelemetryEvent,
     WindowedHealthRecord,
     NestedWindowedHealthTrend,
