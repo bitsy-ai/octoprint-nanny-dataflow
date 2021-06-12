@@ -10,7 +10,7 @@ import subprocess
 import apache_beam as beam
 from apache_beam.options.pipeline_options import PipelineOptions
 from print_nanny_dataflow.encoders.types import (
-    RenderVideoMessage,
+    RenderVideoRequest,
 )
 from apache_beam.transforms.trigger import AfterCount, AfterWatermark, AfterAny
 import print_nanny_dataflow
@@ -19,20 +19,31 @@ logger = logging.getLogger(__name__)
 
 
 class RenderVideo(beam.DoFn):
-    def process(self, msg: RenderVideoMessage) -> Iterable[bytes]:
+    def __init__(
+        self, input_path: str, output_path: str, cdn_base_path: str, bucket: str
+    ):
+        self.input_path = os.path.join("gs://", bucket, input_path)
+        self.output_path = os.path.join("gs://", bucket, output_path)
+        self.cdn_base_path = os.path.join("gs://", bucket, cdn_base_path)
+        self.bucket = bucket
+
+    def process(self, msg: RenderVideoRequest) -> Iterable[bytes]:
         path = os.path.dirname(print_nanny_dataflow.__file__)
         script = os.path.join(path, "scripts", "render_video.sh")
+        output_path = self.output_path.format(print_session=msg.print_session)
+        input_path = self.input_path.format(print_session=msg.print_session)
+
         val = subprocess.check_call(
             [
                 script,
                 "-i",
-                msg.gcs_input,
+                input_path,
                 "-s",
                 msg.print_session,
                 "-o",
-                msg.gcs_output,
+                output_path,
                 "-c",
-                msg.full_cdn_path(),
+                msg.cdn_output_path,
             ]
         )
         logger.info(val)
@@ -47,12 +58,12 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--input-path",
-        default="dataflow/telemetry_event/{session}/NestedTelemetryEvent/jpg",
+        default="dataflow/telemetry_event/{print_session}/NestedTelemetryEvent/jpg",
     )
 
     parser.add_argument(
         "--output-path",
-        default="dataflow/telemetry_event/{session}/NestedTelemetryEvent/jpg",
+        default="dataflow/telemetry_event/{print_session}/NestedTelemetryEvent/mp4",
     )
 
     parser.add_argument(
@@ -63,12 +74,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--cdn-base-path",
-        default="media",
-    )
-
-    parser.add_argument(
-        "--cdn-upload-path",
-        default="uploads/PrintSessionAlert",
+        default="media/uploads/PrintSessionAlert",
     )
 
     parser.add_argument(
@@ -83,17 +89,6 @@ if __name__ == "__main__":
     )
 
     parser.add_argument("--project", default="print-nanny-sandbox")
-
-    parser.add_argument("--api-token", help="Print Nanny API token")
-
-    parser.add_argument(
-        "--api-url", default="https://print-nanny.com/api", help="Print Nanny API url"
-    )
-
-    parser.add_argument(
-        "--session-gap",
-        default=300,
-    )
 
     parser.add_argument("--runner", default="DataflowRunner")
 
@@ -119,13 +114,13 @@ if __name__ == "__main__":
         p
         | f"Read from {input_topic_path}"
         >> beam.io.ReadFromPubSub(topic=input_topic_path)
-        | beam.WindowInto(
-            beam.transforms.window.Sessions(args.session_gap),
-            trigger=alert_pipeline_trigger,
-            accumulation_mode=beam.transforms.trigger.AccumulationMode.DISCARDING,
+        | "Decode RenderVideoRequest" >> beam.Map(RenderVideoRequest.ParseFromString)
+        | "Run render_video.sh"
+        >> beam.ParDo(
+            RenderVideo(
+                args.input_path, args.output_path, args.cdn_base_path, args.bucket
+            )
         )
-        | "Decode bytes" >> beam.Map(RenderVideoMessage.from_bytes)
-        | "Run render_video.sh" >> beam.ParDo(RenderVideo())
         | "Write to PubSub" >> beam.io.WriteToPubSub(output_topic_path)
     )
     result = p.run()
