@@ -19,12 +19,9 @@ logger = logging.getLogger(__name__)
 
 
 class RenderVideo(beam.DoFn):
-    def __init__(
-        self, input_path: str, output_path: str, cdn_base_path: str, bucket: str
-    ):
+    def __init__(self, input_path: str, output_path: str, bucket: str):
         self.input_path = os.path.join("gs://", bucket, input_path)
         self.output_path = os.path.join("gs://", bucket, output_path)
-        self.cdn_base_path = os.path.join("gs://", bucket, cdn_base_path)
         self.bucket = bucket
 
     def process(self, msg: RenderVideoRequest) -> Iterable[bytes]:
@@ -32,6 +29,7 @@ class RenderVideo(beam.DoFn):
         script = os.path.join(path, "scripts", "render_video.sh")
         output_path = self.output_path.format(print_session=msg.print_session)
         input_path = self.input_path.format(print_session=msg.print_session)
+        cdn_output_path = os.path.join("gs://", self.bucket, msg.cdn_output_path)
 
         val = subprocess.check_call(
             [
@@ -43,11 +41,11 @@ class RenderVideo(beam.DoFn):
                 "-o",
                 output_path,
                 "-c",
-                msg.cdn_output_path,
+                cdn_output_path,
             ]
         )
         logger.info(val)
-        yield bytes(msg.to_flatbuffer())
+        yield msg.SerializeToString()
 
 
 if __name__ == "__main__":
@@ -70,11 +68,6 @@ if __name__ == "__main__":
         "--bucket",
         default="print-nanny-sandbox",
         help="GCS Bucket",
-    )
-
-    parser.add_argument(
-        "--cdn-base-path",
-        default="media/uploads/PrintSessionAlert",
     )
 
     parser.add_argument(
@@ -116,11 +109,7 @@ if __name__ == "__main__":
         >> beam.io.ReadFromPubSub(topic=input_topic_path)
         | "Decode RenderVideoRequest" >> beam.Map(RenderVideoRequest.ParseFromString)
         | "Run render_video.sh"
-        >> beam.ParDo(
-            RenderVideo(
-                args.input_path, args.output_path, args.cdn_base_path, args.bucket
-            )
-        )
+        >> beam.ParDo(RenderVideo(args.input_path, args.output_path, args.bucket))
         | "Write to PubSub" >> beam.io.WriteToPubSub(output_topic_path)
     )
     result = p.run()
