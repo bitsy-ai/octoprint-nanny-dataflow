@@ -47,6 +47,7 @@ direct:
 	--bucket=$(BUCKET) \
 	--job_name=$(JOB_NAME)
 
+
 portable: docker-image
 	$(PYTHON) -m $(PIPELINE) \
 	--runner PortableRunner \

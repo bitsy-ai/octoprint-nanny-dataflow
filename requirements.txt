@@ -211,7 +211,7 @@ pandas==1.2.4
     #   tfx-bsl
 pillow==8.2.0
     # via print-nanny-dataflow (setup.py)
-print-nanny-client==0.7.0.dev6
+print-nanny-client==0.7.0.dev7
     # via print-nanny-dataflow (setup.py)
 proto-plus==1.18.1
     # via google-cloud-bigquery
@@ -221,6 +221,7 @@ protobuf==3.17.3
     #   google-api-core
     #   google-cloud-bigquery
     #   googleapis-common-protos
+    #   print-nanny-client
     #   proto-plus
     #   tensorboard
     #   tensorflow
