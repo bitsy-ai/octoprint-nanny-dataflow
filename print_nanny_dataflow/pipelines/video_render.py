@@ -9,13 +9,24 @@ import subprocess
 
 import apache_beam as beam
 from apache_beam.options.pipeline_options import PipelineOptions
-from print_nanny_dataflow.encoders.types import (
-    RenderVideoRequest,
-)
+
 from apache_beam.transforms.trigger import AfterCount, AfterWatermark, AfterAny
+from print_nanny_client.protobuf import monitoring_pb2
+
+from print_nanny_dataflow.coders.protobuf import proto_coder
 import print_nanny_dataflow
 
 logger = logging.getLogger(__name__)
+
+video_render_request_coder = beam.coders.ProtoCoder(
+    monitoring_pb2.VideoRenderRequest
+).__class__
+beam.coders.typecoders.registry.register_coder(
+    monitoring_pb2.VideoRenderRequest, video_render_request_coder
+)
+beam.coders.registry.register_coder(
+    monitoring_pb2.VideoRenderRequest, video_render_request_coder
+)
 
 
 class RenderVideo(beam.DoFn):
@@ -24,7 +35,10 @@ class RenderVideo(beam.DoFn):
         self.output_path = os.path.join("gs://", bucket, output_path)
         self.bucket = bucket
 
-    def process(self, msg: RenderVideoRequest) -> Iterable[bytes]:
+    def process(
+        self, msg: monitoring_pb2.VideoRenderRequest
+    ) -> Iterable[monitoring_pb2.VideoRenderRequest]:
+        # msg = VideoRenderRequest.ParseFromString(msg_bytes)
         path = os.path.dirname(print_nanny_dataflow.__file__)
         script = os.path.join(path, "scripts", "render_video.sh")
         output_path = self.output_path.format(print_session=msg.print_session)
@@ -45,7 +59,7 @@ class RenderVideo(beam.DoFn):
             ]
         )
         logger.info(val)
-        yield msg.SerializeToString()
+        yield msg
 
 
 if __name__ == "__main__":
@@ -102,12 +116,13 @@ if __name__ == "__main__":
 
     p = beam.Pipeline(options=beam_options)
     # TODO adjust window triggers
-    alert_pipeline_trigger = AfterAny(AfterCount(1), AfterWatermark(late=AfterCount(1)))
     tmp_file_spec_by_session = (
         p
         | f"Read from {input_topic_path}"
         >> beam.io.ReadFromPubSub(topic=input_topic_path)
-        | "Decode RenderVideoRequest" >> beam.Map(RenderVideoRequest.ParseFromString)
+        | beam.Map(
+            lambda b: monitoring_pb2.VideoRenderRequest().ParseFromString(b)
+        ).with_output_types(monitoring_pb2.VideoRenderRequest)
         | "Run render_video.sh"
         >> beam.ParDo(RenderVideo(args.input_path, args.output_path, args.bucket))
         | "Write to PubSub" >> beam.io.WriteToPubSub(output_topic_path)

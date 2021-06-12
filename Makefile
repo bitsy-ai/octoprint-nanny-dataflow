@@ -42,8 +42,6 @@ direct:
 	$(PYTHON) -m $(PIPELINE) \
 	--runner DirectRunner \
 	--loglevel INFO \
-	--api-url=$(PRINT_NANNY_API_URL) \
-	--api-token=$$PRINT_NANNY_API_TOKEN \
 	--direct_num_workers=12 \
 	--runtime_type_check \
 	--bucket=$(BUCKET) \
@@ -53,8 +51,6 @@ portable: docker-image
 	$(PYTHON) -m $(PIPELINE) \
 	--runner PortableRunner \
 	--loglevel INFO \
-	--api-url=$(PRINT_NANNY_API_URL) \
-	--api-token=$$PRINT_NANNY_API_TOKEN \
 	--job_endpoint=embed \
 	--environment_type=DOCKER \
 	--environment_config=$(IMAGE) \
