@@ -25,8 +25,6 @@ from print_nanny_dataflow.transforms.health import (
     ExplodeWindowedHealthRecord,
     PredictBoundingBoxes,
     FilterBoxAnnotations,
-    SortWindowedHealthDataframe,
-    CreateVideoRenderMessage,
 )
 
 from print_nanny_dataflow.transforms.video import WriteAnnotatedImage
@@ -225,7 +223,6 @@ if __name__ == "__main__":
     _ = fixed_window_view_by_key | "Write FixedWindow TFRecords" >> beam.ParDo(
         WriteWindowedTFRecord(
             args.base_gcs_path,
-            NestedTelemetryEvent.tfrecord_schema(args.num_detections),
         )
     )
 
@@ -237,51 +234,51 @@ if __name__ == "__main__":
         )
     )
 
-    sliding_window_view = parsed_dataset | "Add sliding window" >> beam.WindowInto(
-        beam.transforms.window.SlidingWindows(
-            args.health_window_size, args.health_window_period
-        ),
-        accumulation_mode=beam.transforms.trigger.AccumulationMode.ACCUMULATING,
-    )
+    # sliding_window_view = parsed_dataset | "Add sliding window" >> beam.WindowInto(
+    #     beam.transforms.window.SlidingWindows(
+    #         args.health_window_size, args.health_window_period
+    #     ),
+    #     accumulation_mode=beam.transforms.trigger.AccumulationMode.ACCUMULATING,
+    # )
 
-    _ = (
-        sliding_window_view
-        | "Write SlidingWindow ExplodeWindowedHealthRecord Parquet (unfilterd)"
-        >> beam.ParDo(ExplodeWindowedHealthRecord())
-        | "Group unfiltered health records by key" >> beam.GroupBy("print_session")
-        | "Write SlidingWindow Parquet"
-        >> beam.ParDo(
-            WriteWindowedParquet(
-                args.base_gcs_path,
-                WindowedHealthRecord.pyarrow_schema(),
-                record_type="WindowedHealthRecord/parquet",
-            )
-        )
-    )
+    # _ = (
+    #     sliding_window_view
+    #     | "Write SlidingWindow ExplodeWindowedHealthRecord Parquet (unfilterd)"
+    #     >> beam.ParDo(ExplodeWindowedHealthRecord())
+    #     | "Group unfiltered health records by key" >> beam.GroupBy("print_session")
+    #     | "Write SlidingWindow Parquet"
+    #     >> beam.ParDo(
+    #         WriteWindowedParquet(
+    #             args.base_gcs_path,
+    #             WindowedHealthRecord.pyarrow_schema(),
+    #             record_type="WindowedHealthRecord/parquet",
+    #         )
+    #     )
+    # )
 
-    filtered_health_dataframe = (
-        sliding_window_view
-        | "Drop image data" >> beam.Map(lambda v: v.drop_image_data())
-        | "Group alert pipeline by session" >> beam.GroupBy("print_session")
-        | "Filter detections below threshold & outside area of interest"
-        >> beam.ParDo(FilterAreaOfInterest(calibration_base_path))
-        | beam.ParDo(ExplodeWindowedHealthRecord())
-        | "Windowed health DataFrame" >> beam.GroupBy("print_session")
-        | beam.ParDo(SortWindowedHealthDataframe())
-        | beam.GroupByKey()
-    )
+    # filtered_health_dataframe = (
+    #     sliding_window_view
+    #     | "Drop image data" >> beam.Map(lambda v: v.drop_image_data())
+    #     | "Group alert pipeline by session" >> beam.GroupBy("print_session")
+    #     | "Filter detections below threshold & outside area of interest"
+    #     >> beam.ParDo(FilterAreaOfInterest(calibration_base_path))
+    #     | beam.ParDo(ExplodeWindowedHealthRecord())
+    #     | "Windowed health DataFrame" >> beam.GroupBy("print_session")
+    #     | beam.ParDo(SortWindowedHealthDataframe())
+    #     | beam.GroupByKey()
+    # )
 
-    _ = (
-        filtered_health_dataframe
-        | "Write SlidingWindow (calibration & threshold filtered) Parquet"
-        >> beam.ParDo(
-            WriteWindowedParquet(
-                args.base_gcs_path,
-                NestedWindowedHealthTrend.pyarrow_schema(),
-                record_type="NestedWindowedHealthTrend/parquet",
-            )
-        )
-    )
+    # _ = (
+    #     filtered_health_dataframe
+    #     | "Write SlidingWindow (calibration & threshold filtered) Parquet"
+    #     >> beam.ParDo(
+    #         WriteWindowedParquet(
+    #             args.base_gcs_path,
+    #             NestedWindowedHealthTrend.pyarrow_schema(),
+    #             record_type="NestedWindowedHealthTrend/parquet",
+    #         )
+    #     )
+    # )
 
     result = p.run()
     if args.runner == "DirectRunner":

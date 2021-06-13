@@ -28,31 +28,31 @@ from print_nanny_dataflow.coders.types import (
     NestedWindowedHealthTrend,
     CATEGORY_INDEX,
 )
-from print_nanny_dataflow.metrics.area_of_interest import filter_box_annotations
+from print_nanny_dataflow.metrics.area_of_interest import filter_area_of_interest
 
 from print_nanny_client.flatbuffers.alert.AlertEventTypeEnum import AlertEventTypeEnum
 
 logger = logging.getLogger(__name__)
 
 
-def health_score_trend_polynomial_v1(
-    df: pd.DataFrame, degree=1
-) -> Tuple[pd.DataFrame, np.polynomial.polynomial.Polynomial]:
-    """
-    Takes a pandas DataFrame of WindowedHealthRecords and returns a polynommial fit to degree
-    """
-    xy = (
-        df[df["health_weight"] > 0]
-        .groupby(["ts"])["health_score"]
-        .max()
-        .add(
-            df[df["health_weight"] < 0].groupby(["ts"])["health_score"].min(),
-            fill_value=0,
-        )
-        .cumsum()
-    )
-    trend = np.polynomial.polynomial.Polynomial.fit(xy.index, xy, degree)
-    return xy, trend
+# def health_score_trend_polynomial_v1(
+#     df: pd.DataFrame, degree=1
+# ) -> Tuple[pd.DataFrame, np.polynomial.polynomial.Polynomial]:
+#     """
+#     Takes a pandas DataFrame of WindowedHealthRecords and returns a polynommial fit to degree
+#     """
+#     xy = (
+#         df[df["health_weight"] > 0]
+#         .groupby(["ts"])["health_score"]
+#         .max()
+#         .add(
+#             df[df["health_weight"] < 0].groupby(["ts"])["health_score"].min(),
+#             fill_value=0,
+#         )
+#         .cumsum()
+#     )
+#     trend = np.polynomial.polynomial.Polynomial.fit(xy.index, xy, degree)
+#     return xy, trend
 
 
 class PredictBoundingBoxes(beam.DoFn):
@@ -186,72 +186,72 @@ class FilterBoxAnnotations(beam.DoFn):
         calibration = self.load_calibration(elements[0])
         return session, (
             elements
-            | beam.Map(lambda x: filter_box_annotations(x, calibration=calibration))
+            | beam.Map(lambda x: filter_area_of_interest(x, calibration=calibration))
         )
 
 
-class SortWindowedHealthDataframe(beam.DoFn):
-    """
-    Optional Dataframe checkpoint/write for debugging and analysis
-    @todo this uses pandas.DataFrame as a first pass but beam provides a Dataframe API
-    https://beam.apache.org/documentation/dsls/dataframes/overview/
-    """
+# class SortWindowedHealthDataframe(beam.DoFn):
+#     """
+#     Optional Dataframe checkpoint/write for debugging and analysis
+#     @todo this uses pandas.DataFrame as a first pass but beam provides a Dataframe API
+#     https://beam.apache.org/documentation/dsls/dataframes/overview/
+#     """
 
-    def __init__(self, warmup=3, polyfit_degree=1):
-        self.polyfit_degree = 1
-        self.warmup = warmup
+#     def __init__(self, warmup=3, polyfit_degree=1):
+#         self.polyfit_degree = 1
+#         self.warmup = warmup
 
-    def process(
-        self,
-        keyed_elements: Tuple[
-            Any, Iterable[WindowedHealthRecord]
-        ] = beam.DoFn.ElementParam,
-        window=beam.DoFn.WindowParam,
-    ) -> Iterable[Tuple[str, NestedWindowedHealthTrend]]:
-        key, windowed_health_records = keyed_elements
+#     def process(
+#         self,
+#         keyed_elements: Tuple[
+#             Any, Iterable[WindowedHealthRecord]
+#         ] = beam.DoFn.ElementParam,
+#         window=beam.DoFn.WindowParam,
+#     ) -> Iterable[Tuple[str, NestedWindowedHealthTrend]]:
+#         key, windowed_health_records = keyed_elements
 
-        window_start = int(window.start)
-        window_end = int(window.end)
-        df = (
-            pd.DataFrame(data=windowed_health_records)
-            .sort_values("ts")
-            .set_index(["ts"])
-        )
-        if len(df.index) < self.warmup:
-            return
-        try:
-            cumsum, trend = health_score_trend_polynomial_v1(
-                df, degree=self.polyfit_degree
-            )
-        except ValueError as e:
-            logger.error(
-                {
-                    "error": e,
-                    "data": df,
-                    "msg": "Fatal error in SortWindowedHealthDataframe transform",
-                }
-            )
-            return
-        metadata = df.iloc[0]["metadata"]
-        logger.info(
-            f"SortWindowedHealthDataframe emitting NestedWindowedHealthTrend window_start={window_start} window_end={window_end}"
-        )
-        yield (
-            key,
-            NestedWindowedHealthTrend(
-                print_session=key,
-                poly_coef=np.array(trend.coef),
-                poly_domain=np.array(trend.domain),
-                poly_roots=np.array(trend.roots()),
-                poly_degree=trend.degree(),
-                cumsum=cumsum.to_numpy(),
-                metadata=metadata,
-                health_score=df["health_score"].to_numpy(),
-                health_weight=df["health_weight"].to_numpy(),
-                detection_class=df["detection_class"].to_numpy(),
-                detection_score=df["detection_score"].to_numpy(),
-            ),
-        )
+#         window_start = int(window.start)
+#         window_end = int(window.end)
+#         df = (
+#             pd.DataFrame(data=windowed_health_records)
+#             .sort_values("ts")
+#             .set_index(["ts"])
+#         )
+#         if len(df.index) < self.warmup:
+#             return
+#         try:
+#             cumsum, trend = health_score_trend_polynomial_v1(
+#                 df, degree=self.polyfit_degree
+#             )
+#         except ValueError as e:
+#             logger.error(
+#                 {
+#                     "error": e,
+#                     "data": df,
+#                     "msg": "Fatal error in SortWindowedHealthDataframe transform",
+#                 }
+#             )
+#             return
+#         metadata = df.iloc[0]["metadata"]
+#         logger.info(
+#             f"SortWindowedHealthDataframe emitting NestedWindowedHealthTrend window_start={window_start} window_end={window_end}"
+#         )
+#         yield (
+#             key,
+#             NestedWindowedHealthTrend(
+#                 print_session=key,
+#                 poly_coef=np.array(trend.coef),
+#                 poly_domain=np.array(trend.domain),
+#                 poly_roots=np.array(trend.roots()),
+#                 poly_degree=trend.degree(),
+#                 cumsum=cumsum.to_numpy(),
+#                 metadata=metadata,
+#                 health_score=df["health_score"].to_numpy(),
+#                 health_weight=df["health_weight"].to_numpy(),
+#                 detection_class=df["detection_class"].to_numpy(),
+#                 detection_score=df["detection_score"].to_numpy(),
+#             ),
+#         )
 
 
 class CreateVideoRenderMessage(beam.DoFn):

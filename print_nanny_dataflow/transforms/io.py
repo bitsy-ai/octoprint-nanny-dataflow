@@ -4,9 +4,10 @@ import pandas as pd
 import numpy as np
 from collections import Sequence
 from collections import OrderedDict
-from typing import Tuple, Any, Iterable, NamedTuple, List
+from typing import Collection, Tuple, Any, Iterable, NamedTuple, List
 import apache_beam as beam
 
+from google.protobuf.message import Message
 from tensorflow_metadata.proto.v0 import schema_pb2
 from apache_beam.pvalue import PCollection
 from print_nanny_dataflow.coders.tfrecord_example import ExampleProtoEncoder
@@ -17,14 +18,10 @@ logger = logging.getLogger(__name__)
 class WriteWindowedTFRecord(beam.DoFn):
     """Output one TFRecord file per window per key"""
 
-    def __init__(
-        self, base_path: str, schema: schema_pb2.Schema, record_type: str = "tfrecord"
-    ):
+    def __init__(self, base_path: str):
         self.base_path = base_path
-        self.schema = schema
-        self.record_type = record_type
 
-    def outpath(self, key: str, window_start: int, window_end: int) -> str:
+    def outpath(self, key: str, window_start: int, window_end: int, klass: str) -> str:
         """
         Constructs output path from parts:
 
@@ -39,23 +36,23 @@ class WriteWindowedTFRecord(beam.DoFn):
         return os.path.join(
             self.base_path,
             key,
-            self.record_type,
+            klass,
+            "tfrecord",
             f"{window_start}_{window_end}",
         )
 
     def process(
         self,
-        keyed_elements: Tuple[Any, Iterable[NamedTuple]] = beam.DoFn.ElementParam,
+        keyed_elements: Tuple[Any, List[Message]] = beam.DoFn.ElementParam,
         window=beam.DoFn.WindowParam,
     ) -> Iterable[Iterable[str]]:
         key, elements = keyed_elements
 
         window_start = int(window.start)
         window_end = int(window.end)
-        output = self.outpath(key, window_start, window_end)
+        output = self.outpath(key, window_start, window_end, str(elements[0].__class__))
 
-        coder = ExampleProtoEncoder(self.schema)
-        logger.info(f"Writing {output} with coder {coder}")
+        # coder = ExampleProtoEncoder(self.schema)
 
         yield (
             elements
@@ -64,7 +61,6 @@ class WriteWindowedTFRecord(beam.DoFn):
                 num_shards=1,
                 shard_name_template="",
                 file_name_suffix=".tfrecords.gz",
-                coder=coder,
             )
         )
 

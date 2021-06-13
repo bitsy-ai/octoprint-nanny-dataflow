@@ -1,4 +1,4 @@
-from typing import Iterable, Tuple, Optional
+from typing import Iterable, Tuple, Optional, Collection
 import numpy as np
 
 from print_nanny_client.protobuf.monitoring_pb2 import DeviceCalibration, BoxAnnotations
@@ -6,7 +6,7 @@ from print_nanny_dataflow.coders.types import CATEGORY_INDEX
 
 
 def calc_percent_intersection(
-    detection_boxes: Iterable[BoxAnnotations],
+    detection_boxes: Collection[BoxAnnotations],
     aoi_coords: Tuple[float, float, float, float],
 ) -> Iterable:
     """

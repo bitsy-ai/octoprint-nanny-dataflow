@@ -6,7 +6,6 @@ import apache_beam as beam
 from print_nanny_dataflow.utils.visualization import (
     visualize_boxes_and_labels_on_image_array,
 )
-from print_nanny_dataflow.transforms.health import FilterAreaOfInterest
 from print_nanny_dataflow.coders.types import (
     NestedTelemetryEvent,
     WindowedHealthRecord,
