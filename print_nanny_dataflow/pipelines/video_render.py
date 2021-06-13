@@ -10,7 +10,7 @@ import subprocess
 import apache_beam as beam
 from apache_beam.options.pipeline_options import PipelineOptions
 
-from print_nanny_client.protobuf.monitoring_pb2 import VideoRenderRequest
+from print_nanny_client.protobuf.alert_pb2 import VideoRenderRequest
 import print_nanny_dataflow
 
 logger = logging.getLogger(__name__)
@@ -22,9 +22,7 @@ class RenderVideo(beam.DoFn):
         self.output_path = os.path.join("gs://", bucket, output_path)
         self.bucket = bucket
 
-    def process(self, msg_bytes: bytes) -> Iterable[bytes]:
-        msg = VideoRenderRequest()
-        msg.ParseFromString(msg_bytes)
+    def process(self, msg: VideoRenderRequest) -> Iterable[bytes]:
         path = os.path.dirname(print_nanny_dataflow.__file__)
         script = os.path.join(path, "scripts", "render_video.sh")
         output_path = self.output_path.format(print_session=msg.print_session)
@@ -106,9 +104,9 @@ if __name__ == "__main__":
         p
         | f"Read from {input_topic_path}"
         >> beam.io.ReadFromPubSub(topic=input_topic_path)
-        # | beam.Map(
-        #     lambda b: VideoRenderRequest().ParseFromString(b)
-        # ).with_output_types(VideoRenderRequest)
+        | beam.Map(
+            lambda b: VideoRenderRequest().ParseFromString(b)
+        ).with_output_types(VideoRenderRequest)
         | "Run render_video.sh"
         >> beam.ParDo(RenderVideo(args.input_path, args.output_path, args.bucket))
         | "Write to PubSub" >> beam.io.WriteToPubSub(output_topic_path)

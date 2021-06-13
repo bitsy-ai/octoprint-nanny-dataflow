@@ -211,7 +211,7 @@ pandas==1.2.4
     #   tfx-bsl
 pillow==8.2.0
     # via print-nanny-dataflow (setup.py)
-print-nanny-client==0.7.0.dev8
+print-nanny-client==0.7.0.dev15
     # via print-nanny-dataflow (setup.py)
 proto-plus==1.18.1
     # via google-cloud-bigquery
