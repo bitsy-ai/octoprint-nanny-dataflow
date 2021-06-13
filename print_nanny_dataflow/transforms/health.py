@@ -28,6 +28,8 @@ from print_nanny_dataflow.coders.types import (
     NestedWindowedHealthTrend,
     CATEGORY_INDEX,
 )
+from print_nanny_dataflow.metrics.area_of_interest import filter_box_annotations
+
 from print_nanny_client.flatbuffers.alert.AlertEventTypeEnum import AlertEventTypeEnum
 
 logger = logging.getLogger(__name__)
@@ -147,7 +149,7 @@ class ExplodeWindowedHealthRecord(beam.DoFn):
         ]
 
 
-class FilterAreaOfInterest(beam.DoFn):
+class FilterBoxAnnotations(beam.DoFn):
     def __init__(
         self,
         calibration_base_path: str,
@@ -172,20 +174,20 @@ class FilterAreaOfInterest(beam.DoFn):
                 calibration_json = json.load(f)
 
             yield DeviceCalibration(**calibration_json)
-        raise ValueError(f"Path does not exist: {device_calibration_path}")
+        return None
 
     def process(
         self,
-        keyed_elements=Tuple[str, Iterable[NestedTelemetryEvent]],
+        keyed_elements=Tuple[str, Iterable[AnnotatedMonitoringImage]],
         key=beam.DoFn.KeyParam,
-    ) -> Iterable[NestedTelemetryEvent]:
+    ) -> Iterable[AnnotatedMonitoringImage]:
         session, elements = keyed_elements
 
         calibration = self.load_calibration(elements[0])
-        if calibration:
-            return elements | beam.Map(lambda event: calibration.filter_event(event))
-        else:
-            return elements
+        return session, (
+            elements
+            | beam.Map(lambda x: filter_box_annotations(x, calibration=calibration))
+        )
 
 
 class SortWindowedHealthDataframe(beam.DoFn):

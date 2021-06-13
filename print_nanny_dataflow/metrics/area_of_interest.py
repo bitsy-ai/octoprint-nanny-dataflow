@@ -18,10 +18,11 @@ def calc_percent_intersection(
     # for each bounding box, calculate the intersection-over-area
     for i, box in enumerate(detection_boxes):
         # determine the coordinates of the intersection rectangle
-        x_left = max(aoi_coords[0], box[0])
-        y_top = max(aoi_coords[1], box[1])
-        x_right = min(aoi_coords[2], box[2])
-        y_bottom = min(aoi_coords[3], box[3])
+
+        x_left = max(aoi_coords[0], box.xmin)
+        y_top = max(aoi_coords[1], box.ymin)
+        x_right = min(aoi_coords[2], box.xmax)
+        y_bottom = min(aoi_coords[3], box.ymax)
 
         # boxes do not intersect, area is 0
         if x_right < x_left or y_bottom < y_top:
@@ -34,7 +35,7 @@ def calc_percent_intersection(
         intersection_area = (x_right - x_left) * (y_bottom - y_top)
 
         # compute the area of detection box
-        box_area = (box[2] - box[0]) * (box[3] - box[1])
+        box_area = (box.xmax - box.xmin) * (box.ymax - box.ymin)
 
         if (intersection_area / box_area) == 1.0:
             aou[i] = 1.0
@@ -45,27 +46,17 @@ def calc_percent_intersection(
     return aou
 
 
-def filter_box_annotations(
+def filter_area_of_interest(
     element: BoxAnnotations,
-    calibration: Optional[DeviceCalibration] = None,
+    calibration: DeviceCalibration,
     min_calibration_area_overlap=0.75,
-    min_score_threshold=0.66,
 ) -> BoxAnnotations:
 
     detection_scores = np.array(element.detection_scores)
-
-    if calibration:
-        percent_intersection = calc_percent_intersection(
-            element.detection_boxes, calibration.coordinates
-        )
-        ignored_mask = (
-            percent_intersection
-            < min_calibration_area_overlap & detection_scores
-            > min_score_threshold
-        )
-    else:
-        ignored_mask = detection_scores > min_score_threshold
-
+    percent_intersection = calc_percent_intersection(
+        element.detection_boxes, calibration.coordinates
+    )
+    ignored_mask = percent_intersection > min_calibration_area_overlap
     detection_boxes = np.array(element.detection_boxes)
     detection_classes = np.array(element.detection_classes)
     filtered_detection_boxes = detection_boxes[ignored_mask]
@@ -74,7 +65,6 @@ def filter_box_annotations(
     filtered_detection_classes = detection_classes[ignored_mask]
 
     num_detections = int(np.count_nonzero(ignored_mask))
-
     annotations = BoxAnnotations(
         num_detections=num_detections,
         detection_scores=filtered_detection_scores,

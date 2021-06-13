@@ -24,7 +24,7 @@ from print_nanny_dataflow.transforms.io import (
 from print_nanny_dataflow.transforms.health import (
     ExplodeWindowedHealthRecord,
     PredictBoundingBoxes,
-    FilterAreaOfInterest,
+    FilterBoxAnnotations,
     SortWindowedHealthDataframe,
     CreateVideoRenderMessage,
 )
@@ -34,7 +34,6 @@ from print_nanny_dataflow.transforms.video import WriteAnnotatedImage
 from print_nanny_dataflow.coders.types import (
     NestedTelemetryEvent,
     WindowedHealthRecord,
-    DeviceCalibration,
     NestedWindowedHealthTrend,
 )
 
@@ -208,7 +207,7 @@ if __name__ == "__main__":
         fixed_window_view_by_key
         | "Filter area of interest and detections above threshold"
         >> beam.ParDo(
-            FilterAreaOfInterest(
+            FilterBoxAnnotations(
                 calibration_base_path,
             )
         )
