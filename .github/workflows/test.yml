@@ -36,7 +36,7 @@ jobs:
           .venv/bin/pip install --no-cache-dir install .
       - name: Install test dependencies
         run: |
-          .venv/bin/pip install -r dev-requirements.txt
+          .venv/bin/pip install -r requirements-dev.txt
       - name: MyPy
         run: |
           source .venv/bin/activate && make mypy
