@@ -34,9 +34,9 @@ class TypedPathMixin:
         key: str,
         datesegment: str,
         module: str,
-        struct: str,
         ext: str,
-        window: Optional[Tuple[int, int]] = None,
+        filename: str,
+        window_type: str,
         protocol: Optional[str] = "gs://",
     ) -> str:
         """
@@ -50,26 +50,16 @@ class TypedPathMixin:
         Results in:
         gs://bucket-name/dataflow/base/path/to/sinks/<session>/<classname>/tfrecords/
         """
-        if window is None:
-            return os.path.join(
-                protocol,
-                bucket,
-                base_path,
-                f"{module}.{struct}",
-                datesegment,
-                key,
-                ext,
-            )
-        window_start, window_end = window
         return os.path.join(
             protocol,
             bucket,
             base_path,
-            f"{module}.{struct}",
+            module,
+            window_type,
             datesegment,
             key,
             ext,
-            f"{window_start}_{window_end}",
+            filename,
         )
 
 

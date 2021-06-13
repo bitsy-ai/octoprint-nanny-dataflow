@@ -1,12 +1,16 @@
 from typing import Iterable, Tuple, Optional, Collection
 import numpy as np
 
-from print_nanny_client.protobuf.monitoring_pb2 import DeviceCalibration, BoxAnnotations
+from print_nanny_client.protobuf.monitoring_pb2 import (
+    DeviceCalibration,
+    BoxAnnotations,
+    Box,
+)
 from print_nanny_dataflow.coders.types import CATEGORY_INDEX
 
 
 def calc_percent_intersection(
-    detection_boxes: Collection[BoxAnnotations],
+    detection_boxes: Collection[Collection[float]],
     aoi_coords: Tuple[float, float, float, float],
 ) -> Iterable:
     """
@@ -19,10 +23,10 @@ def calc_percent_intersection(
     for i, box in enumerate(detection_boxes):
         # determine the coordinates of the intersection rectangle
 
-        x_left = max(aoi_coords[0], box.xmin)
-        y_top = max(aoi_coords[1], box.ymin)
-        x_right = min(aoi_coords[2], box.xmax)
-        y_bottom = min(aoi_coords[3], box.ymax)
+        x_left = max(aoi_coords[0], box[0])
+        y_top = max(aoi_coords[1], box[1])
+        x_right = min(aoi_coords[2], box[2])
+        y_bottom = min(aoi_coords[3], box[3])
 
         # boxes do not intersect, area is 0
         if x_right < x_left or y_bottom < y_top:
@@ -35,7 +39,7 @@ def calc_percent_intersection(
         intersection_area = (x_right - x_left) * (y_bottom - y_top)
 
         # compute the area of detection box
-        box_area = (box.xmax - box.xmin) * (box.ymax - box.ymin)
+        box_area = (box[2] - box[0]) * (box[3] - box[1])
 
         if (intersection_area / box_area) == 1.0:
             aou[i] = 1.0
@@ -53,13 +57,14 @@ def filter_area_of_interest(
 ) -> BoxAnnotations:
 
     detection_scores = np.array(element.detection_scores)
+    detection_boxes = np.array([b.xy0_xy1 for b in element.detection_boxes])
     percent_intersection = calc_percent_intersection(
-        element.detection_boxes, calibration.coordinates
+        detection_boxes, calibration.coordinates
     )
     ignored_mask = percent_intersection > min_calibration_area_overlap
-    detection_boxes = np.array(element.detection_boxes)
     detection_classes = np.array(element.detection_classes)
-    filtered_detection_boxes = detection_boxes[ignored_mask]
+
+    filtered_detection_boxes = [Box(xy0_xy1=b) for b in detection_boxes[ignored_mask]]
 
     filtered_detection_scores = detection_scores[ignored_mask]
     filtered_detection_classes = detection_classes[ignored_mask]
