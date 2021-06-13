@@ -43,7 +43,7 @@ pytest:
 	python -m pytest --disable-pytest-warnings
 
 pytest-coverage:
-	pytho -m pytest --cov=./ --cov-report=xml 
+	python -m pytest --cov=./ --cov-report=xml 
 direct:
 	$(PYTHON) -m $(PIPELINE) \
 	--runner DirectRunner \
