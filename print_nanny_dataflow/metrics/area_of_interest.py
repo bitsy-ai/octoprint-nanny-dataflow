@@ -1,4 +1,4 @@
-from typing import Iterable, Tuple, Optional, Collection
+from typing import Iterable, Tuple, Optional, Collection, List
 import numpy as np
 
 from google.protobuf.internal.containers import RepeatedScalarFieldContainer
@@ -7,7 +7,7 @@ from print_nanny_client.protobuf.monitoring_pb2 import (
     BoxAnnotations,
     Box,
 )
-from print_nanny_dataflow.coders.types import CATEGORY_INDEX
+from print_nanny_dataflow.coders.types import get_health_weight
 
 
 def calc_percent_intersection(
@@ -71,9 +71,8 @@ def filter_area_of_interest(
     filtered_detection_classes = element.detection_classes[ignored_mask]
 
     num_detections = np.count_nonzero(ignored_mask)  # type: ignore
-    health_weights = [
-        CATEGORY_INDEX[i]["health_weight"] for i in filtered_detection_classes
-    ]
+    health_weights = map(get_health_weight, filtered_detection_classes)
+
     annotations = BoxAnnotations(
         num_detections=num_detections,
         detection_scores=filtered_detection_scores,

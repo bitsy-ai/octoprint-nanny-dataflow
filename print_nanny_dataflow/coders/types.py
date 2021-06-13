@@ -34,6 +34,10 @@ CATEGORY_INDEX = {
 }
 
 
+def get_health_weight(label: int) -> float:
+    return CATEGORY_INDEX[label].get("health_weight")  # type: ignore
+
+
 class WindowType(Enum):
     Fixed = 1
     Sliding = 2

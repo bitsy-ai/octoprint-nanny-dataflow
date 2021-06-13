@@ -26,40 +26,10 @@ from print_nanny_dataflow.transforms.health import (
 )
 
 from print_nanny_dataflow.transforms.video import WriteAnnotatedImage
-
-
 from print_nanny_dataflow.metrics import FixedWindowMetricStart, FixedWindowMetricEnd
-
-from print_nanny_dataflow.clients.rest import RestAPIClient
 
 
 logger = logging.getLogger(__name__)
-
-
-async def download_active_experiment_model(model_dir=".tmp/", model_artifact_id=1):
-
-    tmp_artifacts_tarball = os.path.join(model_dir, "artifacts.tar.gz")
-    rest_client = RestAPIClient(api_token=args.api_token, api_url=args.api_url)
-
-    model_artifacts = await rest_client.get_model_artifact(model_artifact_id)
-
-    async with aiohttp.ClientSession() as session:
-        logger.info(f"Downloading model artfiact tarball")
-        async with session.get(model_artifacts.artifacts) as res:
-            artifacts_gzipped = await res.read()
-            with open(tmp_artifacts_tarball, "wb+") as f:
-                f.write(artifacts_gzipped)
-            logger.info(f"Finished writing {tmp_artifacts_tarball}")
-    with tarfile.open(tmp_artifacts_tarball, "r:gz") as tar:
-        tar.extractall(model_dir)
-    logger.info(f"Finished extracting {tmp_artifacts_tarball}")
-
-
-# def add_timestamp(element):
-#     import apache_beam as beam
-
-#     return beam.window.TimestampedValue(element, element.metadata.ts)
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(

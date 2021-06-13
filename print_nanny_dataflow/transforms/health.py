@@ -19,13 +19,7 @@ from print_nanny_client.protobuf.monitoring_pb2 import (
     DeviceCalibration,
     Box,
 )
-from print_nanny_dataflow.coders.types import (
-    NestedTelemetryEvent,
-    WindowedHealthRecord,
-    Metadata,
-    NestedWindowedHealthTrend,
-    CATEGORY_INDEX,
-)
+from print_nanny_dataflow.coders.types import get_health_weight
 from print_nanny_dataflow.metrics.area_of_interest import filter_area_of_interest
 
 
@@ -90,7 +84,7 @@ class PredictBoundingBoxes(beam.DoFn):
         num_detections = np.squeeze(num_detections, axis=0)
 
         detection_boxes = [Box(xy=b) for b in box_data]
-        health_weights = [CATEGORY_INDEX[i]["health_weight"] for i in class_data]
+        health_weights = map(get_health_weight, class_data)
         annotations = BoxAnnotations(
             num_detections=num_detections,
             detection_scores=score_data,
@@ -104,3 +98,46 @@ class PredictBoundingBoxes(beam.DoFn):
 
     def process(self, element: MonitoringImage) -> Iterable[AnnotatedMonitoringImage]:
         yield self.process_timed(element)
+
+
+class FilterBoxAnnotations(beam.DoFn):
+    def __init__(
+        self,
+        calibration_base_path: str,
+        calibration_filename: str = "calibration.json",
+    ):
+        self.calibration_base_path = calibration_base_path
+        self.calibration_filename = calibration_filename
+
+    def load_calibration(
+        self, element: AnnotatedMonitoringImage
+    ) -> Optional[DeviceCalibration]:
+        gcs_client = beam.io.gcp.gcsio.GcsIO()
+        device_id = element.monitoring_image.metadata.octoprint_device_id
+        device_calibration_path = os.path.join(
+            self.calibration_base_path, str(device_id), self.calibration_filename
+        )
+        if gcs_client.exists(device_calibration_path):
+            with gcs_client.open(device_calibration_path, "r") as f:
+                logger.info(
+                    f"Loading device calibration from {device_calibration_path}"
+                )
+                calibration_json = json.load(f)
+
+            return DeviceCalibration(**calibration_json)
+        return None
+
+    def process(
+        self,
+        keyed_elements=Tuple[str, Iterable[AnnotatedMonitoringImage]],
+    ) -> Iterable[AnnotatedMonitoringImage]:
+        session, elements = keyed_elements
+        calibration = self.load_calibration(elements[0])
+        return session, (
+            elements
+            | beam.Map(
+                lambda x: filter_area_of_interest(x, calibration=calibration)
+                if calibration
+                else x
+            )
+        )
