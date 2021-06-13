@@ -37,6 +37,7 @@ class TypedPathMixin:
         struct: str,
         ext: str,
         window: Optional[Tuple[int, int]] = None,
+        protocol: Optional[str] = "gs://",
     ) -> str:
         """
         Constructs output path from parts:
@@ -51,6 +52,7 @@ class TypedPathMixin:
         """
         if window is None:
             return os.path.join(
+                protocol,
                 bucket,
                 base_path,
                 f"{module}.{struct}",
@@ -60,6 +62,7 @@ class TypedPathMixin:
             )
         window_start, window_end = window
         return os.path.join(
+            protocol,
             bucket,
             base_path,
             f"{module}.{struct}",
