@@ -6,18 +6,10 @@ import apache_beam as beam
 from print_nanny_dataflow.utils.visualization import (
     visualize_boxes_and_labels_on_image_array,
 )
-from print_nanny_dataflow.transforms.health import FilterAreaOfInterest
-from print_nanny_dataflow.encoders.types import (
-    NestedTelemetryEvent,
-    WindowedHealthRecord,
-    DeviceCalibration,
-    RenderVideoMessage,
-    AnnotatedImage,
+from print_nanny_dataflow.coders.types import (
     CATEGORY_INDEX,
-    NestedWindowedHealthTrend,
-    RenderVideoMessage,
-    Metadata,
 )
+from print_nanny_client.protobuf.monitoring_pb2 import AnnotatedMonitoringImage
 import PIL
 import pandas as pd
 import numpy as np
@@ -41,7 +33,7 @@ class WriteAnnotatedImage(beam.DoFn):
         self.base_path = base_path
         self.record_type = record_type
 
-    def annotate_image(self, event: NestedTelemetryEvent) -> bytes:
+    def annotate_image(self, event: AnnotatedMonitoringImage) -> bytes:
         if event.image_data:
             image_np = np.array(PIL.Image.open(io.BytesIO(event.image_data)))
         else:
@@ -62,7 +54,7 @@ class WriteAnnotatedImage(beam.DoFn):
             )
         else:
             detection_boundary_mask = self.calibration["mask"]
-            ignored_mask = np.invert(detection_boundary_mask)
+            ignored_mask = np.invert(detection_boundary_mask)  # type: ignore
             annotated_image_data = visualize_boxes_and_labels_on_image_array(
                 image_np,
                 event.detection_boxes(),
@@ -88,7 +80,7 @@ class WriteAnnotatedImage(beam.DoFn):
 
     def process(
         self,
-        element: NestedTelemetryEvent,
+        element: AnnotatedMonitoringImage,
         window=beam.DoFn.WindowParam,
     ) -> Iterable[Tuple[str, str]]:
         outpath = self.outpath(self.base_path, element.print_session, element.ts)

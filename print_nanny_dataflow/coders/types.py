@@ -329,55 +329,6 @@ class WindowedHealthRecord(NamedTuple):
         return pa.schema(cls.pyarrow_fields())
 
 
-class DeviceCalibration(NamedTuple):
-    coordinates: npt.NDArray[npt.Float32]
-    mask: npt.NDArray[npt.Bool]
-    fpm: int
-
-    def filter_event(
-        self, event: "NestedTelemetryEvent", min_overlap_area: float = 0.75
-    ):
-        percent_intersection = event.percent_intersection(self.coordinates)
-        ignored_mask = percent_intersection <= min_overlap_area
-
-        detection_boxes = event.detection_boxes
-        included_mask = np.invert(ignored_mask)
-        detection_boxes = np.squeeze(detection_boxes[included_mask])
-        detection_scores = np.squeeze(event.detection_scores[included_mask])
-        detection_classes = np.squeeze(event.detection_classes[included_mask])
-
-        num_detections = int(np.count_nonzero(included_mask))
-
-        filter_fields = [
-            "detection_scores",
-            "detection_classes",
-            "boxes_ymin",
-            "boxes_xmin",
-            "boxes_ymax",
-            "boxes_xmax",
-            "num_detections",
-        ]
-        default_fieldset = {
-            k: v for k, v in event.to_dict().items() if k not in filter_fields
-        }
-        boxes_ymin, boxes_xmin, boxes_ymax, boxes_xmax = detection_boxes.T
-
-        _kwargs = event.to_dict()
-        _kwargs.update(
-            dict(
-                detection_scores=detection_scores,
-                detection_classes=detection_classes,
-                num_detections=num_detections,
-                boxes_ymin=boxes_ymin,
-                boxes_xmin=boxes_xmin,
-                boxes_ymax=boxes_ymax,
-                boxes_xmax=boxes_xmax,
-                calibration=self,
-            )
-        )
-        return NestedTelemetryEvent.__class__(**_kwargs)
-
-
 class AnnotatedImage(NamedTuple):
     ts: int
     print_session: str
@@ -411,7 +362,6 @@ class NestedTelemetryEvent(NamedTuple):
     image_height: npt.Float32
     image_data: Optional[bytes] = None
     image_tensor: Optional[tf.Tensor] = None
-    calibration: Optional[DeviceCalibration] = None
     annotated_image_data: Optional[bytes] = None
 
     @staticmethod
@@ -524,39 +474,6 @@ class NestedTelemetryEvent(NamedTuple):
         exclude = ["image_data", "image_tensor"]
         fieldset = self.to_dict()
         return self.__class__(**{k: v for k, v in fieldset.items() if k not in exclude})
-
-    def min_score_filter(self, score_threshold=0.5):
-        masked_fields = [
-            "detection_scores",
-            "detection_classes",
-            "boxes_ymin",
-            "boxes_xmin",
-            "boxes_ymax",
-            "boxes_xmax",
-        ]
-        ignored_fields = ["num_detections"]
-        fieldset = self.to_dict()
-        mask = self.detection_scores >= score_threshold
-
-        default_fieldset = {
-            k: v
-            for k, v in fieldset.items()
-            if k not in masked_fields and k not in ignored_fields
-        }
-        if np.count_nonzero(mask) == 0:
-            masked_fields_map = {
-                k: np.array([])
-                for k, v in fieldset.items()
-                if k in masked_fields and k not in ignored_fields
-            }
-        else:
-            masked_fields_map = {
-                k: v[mask]
-                for k, v in fieldset.items()
-                if k in masked_fields and k not in ignored_fields
-            }
-        default_fieldset.update(masked_fields_map)
-        return self.__class__(**default_fieldset, num_detections=np.count_nonzero(mask))
 
     def percent_intersection(self, aoi_coords: Tuple[float, float, float, float]):
         """

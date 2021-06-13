@@ -7,60 +7,65 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 import apache_beam as beam
-import subprocess
 
-from tensorflow.python.types.core import Value
 from print_nanny_dataflow.metrics import time_distribution
 
 from apache_beam.io.gcp import gcsio
 
-from print_nanny_dataflow.encoders.types import (
+from print_nanny_client.protobuf.monitoring_pb2 import (
+    MonitoringImage,
+    AnnotatedMonitoringImage,
+    BoxAnnotations,
+    DeviceCalibration,
+)
+from print_nanny_dataflow.coders.types import (
     NestedTelemetryEvent,
     WindowedHealthRecord,
     NestedWindowedHealthTrend,
-    DeviceCalibration,
     RenderVideoMessage,
     Metadata,
     NestedWindowedHealthTrend,
     CATEGORY_INDEX,
 )
+from print_nanny_dataflow.metrics.area_of_interest import filter_area_of_interest
+
 from print_nanny_client.flatbuffers.alert.AlertEventTypeEnum import AlertEventTypeEnum
 
 logger = logging.getLogger(__name__)
 
 
-def health_score_trend_polynomial_v1(
-    df: pd.DataFrame, degree=1
-) -> Tuple[pd.DataFrame, np.polynomial.polynomial.Polynomial]:
-    """
-    Takes a pandas DataFrame of WindowedHealthRecords and returns a polynommial fit to degree
-    """
-    xy = (
-        df[df["health_weight"] > 0]
-        .groupby(["ts"])["health_score"]
-        .max()
-        .add(
-            df[df["health_weight"] < 0].groupby(["ts"])["health_score"].min(),
-            fill_value=0,
-        )
-        .cumsum()
-    )
-    trend = np.polynomial.polynomial.Polynomial.fit(xy.index, xy, degree)
-    return xy, trend
+# def health_score_trend_polynomial_v1(
+#     df: pd.DataFrame, degree=1
+# ) -> Tuple[pd.DataFrame, np.polynomial.polynomial.Polynomial]:
+#     """
+#     Takes a pandas DataFrame of WindowedHealthRecords and returns a polynommial fit to degree
+#     """
+#     xy = (
+#         df[df["health_weight"] > 0]
+#         .groupby(["ts"])["health_score"]
+#         .max()
+#         .add(
+#             df[df["health_weight"] < 0].groupby(["ts"])["health_score"].min(),
+#             fill_value=0,
+#         )
+#         .cumsum()
+#     )
+#     trend = np.polynomial.polynomial.Polynomial.fit(xy.index, xy, degree)
+#     return xy, trend
 
 
 class PredictBoundingBoxes(beam.DoFn):
-    def __init__(self, gcs_model_path):
+    def __init__(self, gcs_model_path: str):
 
         self.gcs_model_path = gcs_model_path
 
     @time_distribution("print_health", "predict_bounding_boxes_elapsed")
-    def process_timed(self, element: NestedTelemetryEvent) -> NestedTelemetryEvent:
+    def process_timed(self, element: MonitoringImage) -> AnnotatedMonitoringImage:
         gcs = gcsio.GcsIO()
         with gcs.open(self.gcs_model_path) as f:
             tflite_interpreter = tf.lite.Interpreter(model_content=f.read())
+
         tflite_interpreter.allocate_tensors()
-        input_details = tflite_interpreter.get_input_details()
         output_details = tflite_interpreter.get_output_details()
 
         tflite_interpreter.invoke()
@@ -89,9 +94,20 @@ class PredictBoundingBoxes(beam.DoFn):
         )
         defaults = element.to_dict()
         defaults.update(params)
-        return NestedTelemetryEvent(**defaults)
+        detection_boxes = [BoxAnnotations(*b) for b in box_data]
+        health_weights = [CATEGORY_INDEX[i]["health_weight"] for i in class_data]
+        annotations = BoxAnnotations(
+            num_detections=num_detections,
+            detection_scores=score_data,
+            detection_boxes=detection_boxes,
+            detection_classes=class_data,
+            health_weights=health_weights,
+        )
+        return AnnotatedMonitoringImage(
+            monitoring_image=element, annotations_all=annotations
+        )
 
-    def process(self, element: NestedTelemetryEvent) -> Iterable[NestedTelemetryEvent]:
+    def process(self, element: MonitoringImage) -> Iterable[AnnotatedMonitoringImage]:
         yield self.process_timed(element)
 
 
@@ -132,7 +148,7 @@ class ExplodeWindowedHealthRecord(beam.DoFn):
         ]
 
 
-class FilterAreaOfInterest(beam.DoFn):
+class FilterBoxAnnotations(beam.DoFn):
     def __init__(
         self,
         calibration_base_path: str,
@@ -142,8 +158,8 @@ class FilterAreaOfInterest(beam.DoFn):
         self.calibration_filename = calibration_filename
 
     def load_calibration(
-        self, element: NestedTelemetryEvent
-    ) -> Optional[DeviceCalibration]:
+        self, element: AnnotatedMonitoringImage
+    ) -> Optional[Iterable[DeviceCalibration]]:
         gcs_client = beam.io.gcp.gcsio.GcsIO()
         device_id = element.octoprint_device_id
         device_calibration_path = os.path.join(
@@ -156,85 +172,85 @@ class FilterAreaOfInterest(beam.DoFn):
                 )
                 calibration_json = json.load(f)
 
-            return DeviceCalibration(**calibration_json)
-        raise ValueError(f"Path does not exist: {device_calibration_path}")
+            yield DeviceCalibration(**calibration_json)
+        return None
 
     def process(
         self,
-        keyed_elements=Tuple[str, Iterable[NestedTelemetryEvent]],
+        keyed_elements=Tuple[str, Iterable[AnnotatedMonitoringImage]],
         key=beam.DoFn.KeyParam,
-    ) -> Iterable[NestedTelemetryEvent]:
+    ) -> Iterable[AnnotatedMonitoringImage]:
         session, elements = keyed_elements
 
         calibration = self.load_calibration(elements[0])
-        if calibration:
-            return elements | beam.Map(lambda event: calibration.filter_event(event))
-        else:
-            return elements
-
-
-class SortWindowedHealthDataframe(beam.DoFn):
-    """
-    Optional Dataframe checkpoint/write for debugging and analysis
-    @todo this uses pandas.DataFrame as a first pass but beam provides a Dataframe API
-    https://beam.apache.org/documentation/dsls/dataframes/overview/
-    """
-
-    def __init__(self, warmup=3, polyfit_degree=1):
-        self.polyfit_degree = 1
-        self.warmup = warmup
-
-    def process(
-        self,
-        keyed_elements: Tuple[
-            Any, Iterable[WindowedHealthRecord]
-        ] = beam.DoFn.ElementParam,
-        window=beam.DoFn.WindowParam,
-    ) -> Iterable[Tuple[str, NestedWindowedHealthTrend]]:
-        key, windowed_health_records = keyed_elements
-
-        window_start = int(window.start)
-        window_end = int(window.end)
-        df = (
-            pd.DataFrame(data=windowed_health_records)
-            .sort_values("ts")
-            .set_index(["ts"])
+        return session, (
+            elements
+            | beam.Map(lambda x: filter_area_of_interest(x, calibration=calibration))
         )
-        if len(df.index) < self.warmup:
-            return
-        try:
-            cumsum, trend = health_score_trend_polynomial_v1(
-                df, degree=self.polyfit_degree
-            )
-        except ValueError as e:
-            logger.error(
-                {
-                    "error": e,
-                    "data": df,
-                    "msg": "Fatal error in SortWindowedHealthDataframe transform",
-                }
-            )
-            return
-        metadata = df.iloc[0]["metadata"]
-        logger.info(
-            f"SortWindowedHealthDataframe emitting NestedWindowedHealthTrend window_start={window_start} window_end={window_end}"
-        )
-        yield (
-            key,
-            NestedWindowedHealthTrend(
-                print_session=key,
-                poly_coef=np.array(trend.coef),
-                poly_domain=np.array(trend.domain),
-                poly_roots=np.array(trend.roots()),
-                poly_degree=trend.degree(),
-                cumsum=cumsum.to_numpy(),
-                metadata=metadata,
-                health_score=df["health_score"].to_numpy(),
-                health_weight=df["health_weight"].to_numpy(),
-                detection_class=df["detection_class"].to_numpy(),
-                detection_score=df["detection_score"].to_numpy(),
-            ),
-        )
+
+
+# class SortWindowedHealthDataframe(beam.DoFn):
+#     """
+#     Optional Dataframe checkpoint/write for debugging and analysis
+#     @todo this uses pandas.DataFrame as a first pass but beam provides a Dataframe API
+#     https://beam.apache.org/documentation/dsls/dataframes/overview/
+#     """
+
+#     def __init__(self, warmup=3, polyfit_degree=1):
+#         self.polyfit_degree = 1
+#         self.warmup = warmup
+
+#     def process(
+#         self,
+#         keyed_elements: Tuple[
+#             Any, Iterable[WindowedHealthRecord]
+#         ] = beam.DoFn.ElementParam,
+#         window=beam.DoFn.WindowParam,
+#     ) -> Iterable[Tuple[str, NestedWindowedHealthTrend]]:
+#         key, windowed_health_records = keyed_elements
+
+#         window_start = int(window.start)
+#         window_end = int(window.end)
+#         df = (
+#             pd.DataFrame(data=windowed_health_records)
+#             .sort_values("ts")
+#             .set_index(["ts"])
+#         )
+#         if len(df.index) < self.warmup:
+#             return
+#         try:
+#             cumsum, trend = health_score_trend_polynomial_v1(
+#                 df, degree=self.polyfit_degree
+#             )
+#         except ValueError as e:
+#             logger.error(
+#                 {
+#                     "error": e,
+#                     "data": df,
+#                     "msg": "Fatal error in SortWindowedHealthDataframe transform",
+#                 }
+#             )
+#             return
+#         metadata = df.iloc[0]["metadata"]
+#         logger.info(
+#             f"SortWindowedHealthDataframe emitting NestedWindowedHealthTrend window_start={window_start} window_end={window_end}"
+#         )
+#         yield (
+#             key,
+#             NestedWindowedHealthTrend(
+#                 print_session=key,
+#                 poly_coef=np.array(trend.coef),
+#                 poly_domain=np.array(trend.domain),
+#                 poly_roots=np.array(trend.roots()),
+#                 poly_degree=trend.degree(),
+#                 cumsum=cumsum.to_numpy(),
+#                 metadata=metadata,
+#                 health_score=df["health_score"].to_numpy(),
+#                 health_weight=df["health_weight"].to_numpy(),
+#                 detection_class=df["detection_class"].to_numpy(),
+#                 detection_score=df["detection_score"].to_numpy(),
+#             ),
+#         )
 
 
 class CreateVideoRenderMessage(beam.DoFn):

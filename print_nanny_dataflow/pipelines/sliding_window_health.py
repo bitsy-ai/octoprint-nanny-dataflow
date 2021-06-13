@@ -16,6 +16,7 @@ from typing import List, Tuple, Any, Iterable, Generator, Coroutine, Optional, U
 from apache_beam.options.pipeline_options import GoogleCloudOptions
 from apache_beam.options.pipeline_options import PipelineOptions
 
+from print_nanny_client.protobuf.monitoring_pb2 import MonitoringImage
 from print_nanny_dataflow.transforms.io import (
     WriteWindowedTFRecord,
     WriteWindowedParquet,
@@ -23,23 +24,21 @@ from print_nanny_dataflow.transforms.io import (
 from print_nanny_dataflow.transforms.health import (
     ExplodeWindowedHealthRecord,
     PredictBoundingBoxes,
-    FilterAreaOfInterest,
-    SortWindowedHealthDataframe,
-    CreateVideoRenderMessage,
+    FilterBoxAnnotations,
 )
 
 from print_nanny_dataflow.transforms.video import WriteAnnotatedImage
 
-from print_nanny_dataflow.encoders.types import (
+from print_nanny_dataflow.coders.types import (
     NestedTelemetryEvent,
     WindowedHealthRecord,
-    DeviceCalibration,
     NestedWindowedHealthTrend,
 )
 
 from print_nanny_dataflow.metrics import FixedWindowMetricStart, FixedWindowMetricEnd
 
 from print_nanny_dataflow.clients.rest import RestAPIClient
+
 
 logger = logging.getLogger(__name__)
 
@@ -63,10 +62,10 @@ async def download_active_experiment_model(model_dir=".tmp/", model_artifact_id=
     logger.info(f"Finished extracting {tmp_artifacts_tarball}")
 
 
-def add_timestamp(element):
+def add_timestamp(element: MonitoringImage):
     import apache_beam as beam
 
-    return beam.window.TimestampedValue(element, element.ts)
+    return beam.window.TimestampedValue(element, element.metadata.ts)
 
 
 if __name__ == "__main__":
@@ -121,7 +120,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--health-window-period",
-        default=60,
+        default=30,
         help="Size of sliding event window slices (in seconds)",
     )
 
@@ -129,11 +128,6 @@ if __name__ == "__main__":
         "--num-detections",
         default=40,
         help="Max number of bounding boxes output by nms operation",
-    )
-
-    parser.add_argument(
-        "--batch-size",
-        default=256,
     )
 
     parser.add_argument("--min-score-threshold", default=0.66)
@@ -174,9 +168,9 @@ if __name__ == "__main__":
         >> beam.io.ReadFromPubSub(
             topic=input_topic_path,
         )
-        | "Deserialize Flatbuffer"
-        >> beam.Map(NestedTelemetryEvent.from_flatbuffer).with_output_types(
-            NestedTelemetryEvent
+        | "Deserialize Protobuf"
+        >> beam.Map(lambda b: MonitoringImage().ParseFromString(b)).with_output_types(
+            MonitoringImage
         )
         | "With timestamps" >> beam.Map(add_timestamp)
         | "Add Bounding Box Annotations" >> beam.ParDo(PredictBoundingBoxes(model_path))
@@ -185,8 +179,8 @@ if __name__ == "__main__":
     # key by session id
     parsed_dataset_by_session = (
         parsed_dataset
-        | "Key NestedTelemetryEvent by session id"
-        >> beam.Map(lambda x: (x.print_session, x))
+        | "Key AnnotatedMonitoringImage by session id"
+        >> beam.Map(lambda x: (x.metadata.print_session, x))
     )
 
     fixed_window_view = (
@@ -198,8 +192,7 @@ if __name__ == "__main__":
     )
 
     fixed_window_view_by_key = (
-        fixed_window_view
-        | "Group FixedWindow NestedTelemetryEvent by key" >> beam.GroupByKey()
+        fixed_window_view | "Group FixedWindow by key" >> beam.GroupByKey()
     )
 
     _ = (
@@ -212,7 +205,7 @@ if __name__ == "__main__":
         fixed_window_view_by_key
         | "Filter area of interest and detections above threshold"
         >> beam.ParDo(
-            FilterAreaOfInterest(
+            FilterBoxAnnotations(
                 calibration_base_path,
             )
         )
@@ -230,7 +223,6 @@ if __name__ == "__main__":
     _ = fixed_window_view_by_key | "Write FixedWindow TFRecords" >> beam.ParDo(
         WriteWindowedTFRecord(
             args.base_gcs_path,
-            NestedTelemetryEvent.tfrecord_schema(args.num_detections),
         )
     )
 
@@ -242,51 +234,51 @@ if __name__ == "__main__":
         )
     )
 
-    sliding_window_view = parsed_dataset | "Add sliding window" >> beam.WindowInto(
-        beam.transforms.window.SlidingWindows(
-            args.health_window_size, args.health_window_period
-        ),
-        accumulation_mode=beam.transforms.trigger.AccumulationMode.ACCUMULATING,
-    )
+    # sliding_window_view = parsed_dataset | "Add sliding window" >> beam.WindowInto(
+    #     beam.transforms.window.SlidingWindows(
+    #         args.health_window_size, args.health_window_period
+    #     ),
+    #     accumulation_mode=beam.transforms.trigger.AccumulationMode.ACCUMULATING,
+    # )
 
-    _ = (
-        sliding_window_view
-        | "Write SlidingWindow ExplodeWindowedHealthRecord Parquet (unfilterd)"
-        >> beam.ParDo(ExplodeWindowedHealthRecord())
-        | "Group unfiltered health records by key" >> beam.GroupBy("print_session")
-        | "Write SlidingWindow Parquet"
-        >> beam.ParDo(
-            WriteWindowedParquet(
-                args.base_gcs_path,
-                WindowedHealthRecord.pyarrow_schema(),
-                record_type="WindowedHealthRecord/parquet",
-            )
-        )
-    )
+    # _ = (
+    #     sliding_window_view
+    #     | "Write SlidingWindow ExplodeWindowedHealthRecord Parquet (unfilterd)"
+    #     >> beam.ParDo(ExplodeWindowedHealthRecord())
+    #     | "Group unfiltered health records by key" >> beam.GroupBy("print_session")
+    #     | "Write SlidingWindow Parquet"
+    #     >> beam.ParDo(
+    #         WriteWindowedParquet(
+    #             args.base_gcs_path,
+    #             WindowedHealthRecord.pyarrow_schema(),
+    #             record_type="WindowedHealthRecord/parquet",
+    #         )
+    #     )
+    # )
 
-    filtered_health_dataframe = (
-        sliding_window_view
-        | "Drop image data" >> beam.Map(lambda v: v.drop_image_data())
-        | "Group alert pipeline by session" >> beam.GroupBy("print_session")
-        | "Filter detections below threshold & outside area of interest"
-        >> beam.ParDo(FilterAreaOfInterest(calibration_base_path))
-        | beam.ParDo(ExplodeWindowedHealthRecord())
-        | "Windowed health DataFrame" >> beam.GroupBy("print_session")
-        | beam.ParDo(SortWindowedHealthDataframe())
-        | beam.GroupByKey()
-    )
+    # filtered_health_dataframe = (
+    #     sliding_window_view
+    #     | "Drop image data" >> beam.Map(lambda v: v.drop_image_data())
+    #     | "Group alert pipeline by session" >> beam.GroupBy("print_session")
+    #     | "Filter detections below threshold & outside area of interest"
+    #     >> beam.ParDo(FilterAreaOfInterest(calibration_base_path))
+    #     | beam.ParDo(ExplodeWindowedHealthRecord())
+    #     | "Windowed health DataFrame" >> beam.GroupBy("print_session")
+    #     | beam.ParDo(SortWindowedHealthDataframe())
+    #     | beam.GroupByKey()
+    # )
 
-    _ = (
-        filtered_health_dataframe
-        | "Write SlidingWindow (calibration & threshold filtered) Parquet"
-        >> beam.ParDo(
-            WriteWindowedParquet(
-                args.base_gcs_path,
-                NestedWindowedHealthTrend.pyarrow_schema(),
-                record_type="NestedWindowedHealthTrend/parquet",
-            )
-        )
-    )
+    # _ = (
+    #     filtered_health_dataframe
+    #     | "Write SlidingWindow (calibration & threshold filtered) Parquet"
+    #     >> beam.ParDo(
+    #         WriteWindowedParquet(
+    #             args.base_gcs_path,
+    #             NestedWindowedHealthTrend.pyarrow_schema(),
+    #             record_type="NestedWindowedHealthTrend/parquet",
+    #         )
+    #     )
+    # )
 
     result = p.run()
     if args.runner == "DirectRunner":

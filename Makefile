@@ -32,29 +32,32 @@ clean-pyc: ## remove Python file artifacts
 	find . -name '*.pyo' -exec rm -f {} +
 	find . -name '*~' -exec rm -f {} +
 	find . -name '__pycache__' -exec rm -fr {} +
+	rm -rf .mypy_cache
 
 clean: clean-dist clean-pyc clean-build
 
 docker-image:
 	gcloud builds submit --tag $(IMAGE) --project $(PROJECT)
 
+pytest:
+	python -m pytest --disable-pytest-warnings
+
+pytest-coverage:
+	python -m pytest --cov=./ --cov-report=xml 
 direct:
 	$(PYTHON) -m $(PIPELINE) \
 	--runner DirectRunner \
 	--loglevel INFO \
-	--api-url=$(PRINT_NANNY_API_URL) \
-	--api-token=$$PRINT_NANNY_API_TOKEN \
 	--direct_num_workers=12 \
 	--runtime_type_check \
 	--bucket=$(BUCKET) \
 	--job_name=$(JOB_NAME)
 
+
 portable: docker-image
 	$(PYTHON) -m $(PIPELINE) \
 	--runner PortableRunner \
 	--loglevel INFO \
-	--api-url=$(PRINT_NANNY_API_URL) \
-	--api-token=$$PRINT_NANNY_API_TOKEN \
 	--job_endpoint=embed \
 	--environment_type=DOCKER \
 	--environment_config=$(IMAGE) \
