@@ -104,9 +104,9 @@ if __name__ == "__main__":
         p
         | f"Read from {input_topic_path}"
         >> beam.io.ReadFromPubSub(topic=input_topic_path)
-        | beam.Map(
-            lambda b: VideoRenderRequest().ParseFromString(b)
-        ).with_output_types(VideoRenderRequest)
+        | beam.Map(lambda b: VideoRenderRequest().ParseFromString(b)).with_output_types(
+            VideoRenderRequest
+        )
         | "Run render_video.sh"
         >> beam.ParDo(RenderVideo(args.input_path, args.output_path, args.bucket))
         | "Write to PubSub" >> beam.io.WriteToPubSub(output_topic_path)

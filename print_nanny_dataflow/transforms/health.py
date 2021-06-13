@@ -7,13 +7,16 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 import apache_beam as beam
-import subprocess
 
-from tensorflow.python.types.core import Value
 from print_nanny_dataflow.metrics import time_distribution
 
 from apache_beam.io.gcp import gcsio
 
+from print_nanny_client.protobuf.monitoring_pb2 import (
+    MonitoringImage,
+    AnnotatedMonitoringImage,
+    BoxAnnotations,
+)
 from print_nanny_dataflow.coders.types import (
     NestedTelemetryEvent,
     WindowedHealthRecord,
@@ -50,17 +53,17 @@ def health_score_trend_polynomial_v1(
 
 
 class PredictBoundingBoxes(beam.DoFn):
-    def __init__(self, gcs_model_path):
+    def __init__(self, gcs_model_path: str):
 
         self.gcs_model_path = gcs_model_path
 
     @time_distribution("print_health", "predict_bounding_boxes_elapsed")
-    def process_timed(self, element: NestedTelemetryEvent) -> NestedTelemetryEvent:
+    def process_timed(self, element: MonitoringImage) -> AnnotatedMonitoringImage:
         gcs = gcsio.GcsIO()
         with gcs.open(self.gcs_model_path) as f:
             tflite_interpreter = tf.lite.Interpreter(model_content=f.read())
+
         tflite_interpreter.allocate_tensors()
-        input_details = tflite_interpreter.get_input_details()
         output_details = tflite_interpreter.get_output_details()
 
         tflite_interpreter.invoke()
@@ -89,9 +92,20 @@ class PredictBoundingBoxes(beam.DoFn):
         )
         defaults = element.to_dict()
         defaults.update(params)
-        return NestedTelemetryEvent(**defaults)
+        detection_boxes = [BoxAnnotations(*b) for b in box_data]
+        health_weights = [CATEGORY_INDEX[i] for i in class_data]
+        annotations = BoxAnnotations(
+            num_detections=num_detections,
+            detection_scores=score_data,
+            detection_boxes=detection_boxes,
+            detection_classes=class_data,
+            health_weights=health_weights,
+        )
+        return AnnotatedMonitoringImage(
+            monitoring_image=element, annotations_all=annotations
+        )
 
-    def process(self, element: NestedTelemetryEvent) -> Iterable[NestedTelemetryEvent]:
+    def process(self, element: MonitoringImage) -> Iterable[AnnotatedMonitoringImage]:
         yield self.process_timed(element)
 
 

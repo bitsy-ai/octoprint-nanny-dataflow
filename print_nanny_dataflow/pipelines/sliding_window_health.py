@@ -16,6 +16,7 @@ from typing import List, Tuple, Any, Iterable, Generator, Coroutine, Optional, U
 from apache_beam.options.pipeline_options import GoogleCloudOptions
 from apache_beam.options.pipeline_options import PipelineOptions
 
+from print_nanny_client.protobuf.monitoring_pb2 import MonitoringImage
 from print_nanny_dataflow.transforms.io import (
     WriteWindowedTFRecord,
     WriteWindowedParquet,
@@ -41,6 +42,7 @@ from print_nanny_dataflow.metrics import FixedWindowMetricStart, FixedWindowMetr
 
 from print_nanny_dataflow.clients.rest import RestAPIClient
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -63,10 +65,10 @@ async def download_active_experiment_model(model_dir=".tmp/", model_artifact_id=
     logger.info(f"Finished extracting {tmp_artifacts_tarball}")
 
 
-def add_timestamp(element):
+def add_timestamp(element: MonitoringImage):
     import apache_beam as beam
 
-    return beam.window.TimestampedValue(element, element.ts)
+    return beam.window.TimestampedValue(element, element.metadata.ts)
 
 
 if __name__ == "__main__":
@@ -169,9 +171,9 @@ if __name__ == "__main__":
         >> beam.io.ReadFromPubSub(
             topic=input_topic_path,
         )
-        | "Deserialize Flatbuffer"
-        >> beam.Map(NestedTelemetryEvent.from_flatbuffer).with_output_types(
-            NestedTelemetryEvent
+        | "Deserialize Protobuf"
+        >> beam.Map(lambda b: MonitoringImage().ParseFromString(b)).with_output_types(
+            MonitoringImage
         )
         | "With timestamps" >> beam.Map(add_timestamp)
         | "Add Bounding Box Annotations" >> beam.ParDo(PredictBoundingBoxes(model_path))
