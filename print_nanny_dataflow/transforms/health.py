@@ -17,6 +17,7 @@ from print_nanny_client.protobuf.monitoring_pb2 import (
     AnnotatedMonitoringImage,
     BoxAnnotations,
     DeviceCalibration,
+    Box,
 )
 from print_nanny_dataflow.coders.types import (
     NestedTelemetryEvent,
@@ -54,7 +55,8 @@ logger = logging.getLogger(__name__)
 @beam.typehints.with_output_types(MonitoringImage)
 class ParseMonitoringImage(beam.DoFn):
     def process(self, element: bytes) -> Iterable[MonitoringImage]:
-        parsed = MonitoringImage().ParseFromString(element)
+        parsed = MonitoringImage()
+        parsed.ParseFromString(element)
         yield beam.window.TimestampedValue(parsed, parsed.metadata.ts)
 
 
@@ -87,20 +89,7 @@ class PredictBoundingBoxes(beam.DoFn):
         score_data = np.squeeze(score_data, axis=0)
         num_detections = np.squeeze(num_detections, axis=0)
 
-        ymin, xmin, ymax, xmax = box_data.T
-
-        params = dict(
-            detection_scores=score_data,
-            num_detections=int(num_detections),
-            detection_classes=class_data,
-            boxes_ymin=ymin,
-            boxes_xmin=xmin,
-            boxes_ymax=ymax,
-            boxes_xmax=xmax,
-        )
-        defaults = element.to_dict()
-        defaults.update(params)
-        detection_boxes = [BoxAnnotations(*b) for b in box_data]
+        detection_boxes = [Box(xy=b) for b in box_data]
         health_weights = [CATEGORY_INDEX[i]["health_weight"] for i in class_data]
         annotations = BoxAnnotations(
             num_detections=num_detections,

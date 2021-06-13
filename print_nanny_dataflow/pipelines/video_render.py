@@ -26,23 +26,27 @@ class RenderVideo(TypedPathMixin, beam.DoFn):
     def process(self, msg: VideoRenderRequest) -> Iterable[bytes]:
         path = os.path.dirname(print_nanny_dataflow.__file__)
         script = os.path.join(path, "scripts", "render_video.sh")
+        module = f"{MonitoringImage.__module__}.{MonitoringImage.__name__}"
+
+        filename = "annotated_video.mp4"
         input_path = self.path(
             bucket=self.bucket,
             base_path=self.base_path,
             key=msg.print_session.session,
             datesegment=msg.print_session.datesegment,
-            module=MonitoringImage.__module__,
-            struct=MonitoringImage.__name__,
+            module=module,
             ext="jpg",
+            window_type="fixed",
         )
         output_path = self.path(
             bucket=self.bucket,
             base_path=self.base_path,
             key=msg.print_session.session,
             datesegment=msg.print_session.datesegment,
-            module=MonitoringImage.__module__,
-            struct=MonitoringImage.__name__,
+            module=module,
             ext="mp4",
+            filename=filename,
+            window_type="fixed",
         )
         cdn_output_path = os.path.join("gs://", self.bucket, msg.cdn_output_path)
 
@@ -120,7 +124,7 @@ if __name__ == "__main__":
             VideoRenderRequest
         )
         | "Run render_video.sh"
-        >> beam.ParDo(RenderVideo(args.input_path, args.output_path, args.bucket))
+        >> beam.ParDo(RenderVideo(base_path=args.base_pth, bucket=args.bucket))
         | "Write to PubSub" >> beam.io.WriteToPubSub(output_topic_path)
     )
     result = p.run()

@@ -201,10 +201,10 @@ if __name__ == "__main__":
         | "Write annotated jpgs"
         >> beam.ParDo(
             WriteAnnotatedImage(
-                args.base_gcs_path,
+                base_path=args.base_gcs_path,
+                bucket=args.bucket,
                 score_threshold=args.min_score_threshold,
                 max_boxes_to_draw=args.max_boxes_to_draw,
-                record_type="NestedTelemetryEvent/jpg",
             )
         )
     )

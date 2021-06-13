@@ -50,8 +50,8 @@ class WriteAnnotatedImage(TypedPathMixin, beam.DoFn):
             detection_boundary_mask = self.calibration["mask"]
             ignored_mask = np.invert(detection_boundary_mask)  # type: ignore
             detection_boxes = np.array(
-                [b.xy0_xy1 for b in el.annotations_filtered.detection_boxes]
-            )
+                b.xy for b in el.annotations_filtered.detection_boxes
+            )  # type: ignore
             annotated_image_data = visualize_boxes_and_labels_on_image_array(
                 image_np,
                 detection_boxes,
@@ -67,7 +67,7 @@ class WriteAnnotatedImage(TypedPathMixin, beam.DoFn):
             )
         else:
             detection_boxes = np.array(
-                [b.xy0_xy1 for b in el.annotations_all.detection_boxes]
+                [b.xy for b in el.annotations_all.detection_boxes]
             )
             annotated_image_data = visualize_boxes_and_labels_on_image_array(
                 image_np,
@@ -94,14 +94,17 @@ class WriteAnnotatedImage(TypedPathMixin, beam.DoFn):
         module = (
             f"{AnnotatedMonitoringImage.__module__}.{AnnotatedMonitoringImage.__name__}"
         )
+
+        key = element.monitoring_image.metadata.print_session.session
         outpath = self.path(
             bucket=self.bucket,
             base_path=self.base_path,
-            key=element.metadata.print_session.session,
-            datesegment=element.metadata.print_session.datesegment,
+            key=key,
+            datesegment=element.monitoring_image.metadata.print_session.datesegment,
             ext=self.ext,
-            filename=f"{element.metadata.ts}.{self.ext}",
+            filename=f"{element.monitoring_image.metadata.ts}.{self.ext}",
             module=module,
+            window_type=self.window_type,
         )
         img = self.annotate_image(element)
         gcs_client = beam.io.gcp.gcsio.GcsIO()
@@ -109,4 +112,4 @@ class WriteAnnotatedImage(TypedPathMixin, beam.DoFn):
         with gcs_client.open(outpath, "wb") as f:
             f.write(img)
 
-        yield element.print_session, outpath
+        yield key, outpath

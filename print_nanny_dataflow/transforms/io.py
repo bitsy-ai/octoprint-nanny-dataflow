@@ -35,9 +35,9 @@ class TypedPathMixin:
         datesegment: str,
         module: str,
         ext: str,
-        filename: str,
         window_type: str,
-        protocol: Optional[str] = "gs://",
+        filename: str = "",
+        protocol: str = "gs://",
     ) -> str:
         """
         Constructs output path from parts:
