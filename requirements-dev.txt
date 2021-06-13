@@ -6,3 +6,4 @@ nptyping
 data-science-types
 types-protobuf
 types-six
+pytest-cov
