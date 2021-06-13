@@ -182,8 +182,8 @@ if __name__ == "__main__":
     # key by session id
     parsed_dataset_by_session = (
         parsed_dataset
-        | "Key NestedTelemetryEvent by session id"
-        >> beam.Map(lambda x: (x.print_session, x))
+        | "Key AnnotatedMonitoringImage by session id"
+        >> beam.Map(lambda x: (x.metadata.print_session, x))
     )
 
     fixed_window_view = (
@@ -195,8 +195,7 @@ if __name__ == "__main__":
     )
 
     fixed_window_view_by_key = (
-        fixed_window_view
-        | "Group FixedWindow NestedTelemetryEvent by key" >> beam.GroupByKey()
+        fixed_window_view | "Group FixedWindow by key" >> beam.GroupByKey()
     )
 
     _ = (

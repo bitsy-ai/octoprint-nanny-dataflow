@@ -38,6 +38,8 @@ clean: clean-dist clean-pyc clean-build
 docker-image:
 	gcloud builds submit --tag $(IMAGE) --project $(PROJECT)
 
+pytest:
+	python -m pytest --disable-pytest-warnings
 direct:
 	$(PYTHON) -m $(PIPELINE) \
 	--runner DirectRunner \

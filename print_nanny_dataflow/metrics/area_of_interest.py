@@ -1,14 +1,13 @@
-from typing import Iterable, Tuple
+from typing import Iterable, Tuple, Optional
 import numpy as np
 
-from print_nanny_client.protobuf.monitoring_pb2 import (
-    AnnotatedMonitoringImage,
-    DeviceCalibration,
-)
+from print_nanny_client.protobuf.monitoring_pb2 import DeviceCalibration, BoxAnnotations
+from print_nanny_dataflow.coders.types import CATEGORY_INDEX
 
 
-def percent_intersection(
-    detection_boxes: Iterable, aoi_coords: Tuple[float, float, float, float]
+def calc_percent_intersection(
+    detection_boxes: Iterable[BoxAnnotations],
+    aoi_coords: Tuple[float, float, float, float],
 ) -> Iterable:
     """
     Returns intersection-over-union area, normalized between 0 and 1
@@ -46,44 +45,43 @@ def percent_intersection(
     return aou
 
 
-def filter_area_of_interest(
-    element: AnnotatedMonitoringImage, calibration: DeviceCalibration
-) -> AnnotatedMonitoringImage:
-    pass
-    # percent_intersection = event.percent_intersection(self.coordinates)
-    #     ignored_mask = percent_intersection <= min_overlap_area
+def filter_box_annotations(
+    element: BoxAnnotations,
+    calibration: Optional[DeviceCalibration] = None,
+    min_calibration_area_overlap=0.75,
+    min_score_threshold=0.66,
+) -> BoxAnnotations:
 
-    #     detection_boxes = event.detection_boxes
-    #     included_mask = np.invert(ignored_mask)
-    #     detection_boxes = np.squeeze(detection_boxes[included_mask])
-    #     detection_scores = np.squeeze(event.detection_scores[included_mask])
-    #     detection_classes = np.squeeze(event.detection_classes[included_mask])
+    detection_scores = np.array(element.detection_scores)
 
-    #     num_detections = int(np.count_nonzero(included_mask))
+    if calibration:
+        percent_intersection = calc_percent_intersection(
+            element.detection_boxes, calibration.coordinates
+        )
+        ignored_mask = (
+            percent_intersection
+            < min_calibration_area_overlap & detection_scores
+            > min_score_threshold
+        )
+    else:
+        ignored_mask = detection_scores > min_score_threshold
 
-    #     filter_fields = [
-    #         "detection_scores",
-    #         "detection_classes",
-    #         "boxes_ymin",
-    #         "boxes_xmin",
-    #         "boxes_ymax",
-    #         "boxes_xmax",
-    #         "num_detections",
-    #     ]
-    #     default_fieldset = {
-    #         k: v for k, v in event.to_dict().items() if k not in filter_fields
-    #     }
-    #     boxes_ymin, boxes_xmin, boxes_ymax, boxes_xmax = detection_boxes.T
+    detection_boxes = np.array(element.detection_boxes)
+    detection_classes = np.array(element.detection_classes)
+    filtered_detection_boxes = detection_boxes[ignored_mask]
 
-    #     _kwargs = event.to_dict()
-    #     _kwargs.update(
-    #         dict(
-    #             detection_scores=detection_scores,
-    #             detection_classes=detection_classes,
-    #             num_detections=num_detections,
-    #             boxes_ymin=boxes_ymin,
-    #             boxes_xmin=boxes_xmin,
-    #             boxes_ymax=boxes_ymax,
-    #    )        boxes_xmax=boxes_xmax,
-    #             calibration=self,
-    #         )
+    filtered_detection_scores = detection_scores[ignored_mask]
+    filtered_detection_classes = detection_classes[ignored_mask]
+
+    num_detections = int(np.count_nonzero(ignored_mask))
+
+    annotations = BoxAnnotations(
+        num_detections=num_detections,
+        detection_scores=filtered_detection_scores,
+        detection_boxes=filtered_detection_boxes,
+        detection_classes=filtered_detection_classes,
+        health_weights=[
+            CATEGORY_INDEX[i]["health_weight"] for i in filtered_detection_classes
+        ],
+    )
+    return annotations

@@ -2,3 +2,4 @@ mypy
 pytest
 black
 pip-tools
+nptyping

@@ -16,6 +16,7 @@ from print_nanny_client.protobuf.monitoring_pb2 import (
     MonitoringImage,
     AnnotatedMonitoringImage,
     BoxAnnotations,
+    DeviceCalibration,
 )
 from print_nanny_dataflow.coders.types import (
     NestedTelemetryEvent,
@@ -93,7 +94,7 @@ class PredictBoundingBoxes(beam.DoFn):
         defaults = element.to_dict()
         defaults.update(params)
         detection_boxes = [BoxAnnotations(*b) for b in box_data]
-        health_weights = [CATEGORY_INDEX[i] for i in class_data]
+        health_weights = [CATEGORY_INDEX[i]["health_weight"] for i in class_data]
         annotations = BoxAnnotations(
             num_detections=num_detections,
             detection_scores=score_data,
@@ -156,8 +157,8 @@ class FilterAreaOfInterest(beam.DoFn):
         self.calibration_filename = calibration_filename
 
     def load_calibration(
-        self, element: NestedTelemetryEvent
-    ) -> Optional[DeviceCalibration]:
+        self, element: AnnotatedMonitoringImage
+    ) -> Optional[Iterable[DeviceCalibration]]:
         gcs_client = beam.io.gcp.gcsio.GcsIO()
         device_id = element.octoprint_device_id
         device_calibration_path = os.path.join(
@@ -170,7 +171,7 @@ class FilterAreaOfInterest(beam.DoFn):
                 )
                 calibration_json = json.load(f)
 
-            return DeviceCalibration(**calibration_json)
+            yield DeviceCalibration(**calibration_json)
         raise ValueError(f"Path does not exist: {device_calibration_path}")
 
     def process(
