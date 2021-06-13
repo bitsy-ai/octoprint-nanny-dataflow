@@ -13,27 +13,20 @@ import tarfile
 
 import apache_beam as beam
 from typing import List, Tuple, Any, Iterable, Generator, Coroutine, Optional, Union
-from apache_beam.options.pipeline_options import GoogleCloudOptions
 from apache_beam.options.pipeline_options import PipelineOptions
 
-from print_nanny_client.protobuf.monitoring_pb2 import MonitoringImage
 from print_nanny_dataflow.transforms.io import (
     WriteWindowedTFRecord,
     WriteWindowedParquet,
 )
 from print_nanny_dataflow.transforms.health import (
-    ExplodeWindowedHealthRecord,
+    ParseMonitoringImage,
     PredictBoundingBoxes,
     FilterBoxAnnotations,
 )
 
 from print_nanny_dataflow.transforms.video import WriteAnnotatedImage
 
-from print_nanny_dataflow.coders.types import (
-    NestedTelemetryEvent,
-    WindowedHealthRecord,
-    NestedWindowedHealthTrend,
-)
 
 from print_nanny_dataflow.metrics import FixedWindowMetricStart, FixedWindowMetricEnd
 
@@ -62,10 +55,10 @@ async def download_active_experiment_model(model_dir=".tmp/", model_artifact_id=
     logger.info(f"Finished extracting {tmp_artifacts_tarball}")
 
 
-def add_timestamp(element: MonitoringImage):
-    import apache_beam as beam
+# def add_timestamp(element):
+#     import apache_beam as beam
 
-    return beam.window.TimestampedValue(element, element.metadata.ts)
+#     return beam.window.TimestampedValue(element, element.metadata.ts)
 
 
 if __name__ == "__main__":
@@ -168,11 +161,7 @@ if __name__ == "__main__":
         >> beam.io.ReadFromPubSub(
             topic=input_topic_path,
         )
-        | "Deserialize Protobuf"
-        >> beam.Map(lambda b: MonitoringImage().ParseFromString(b)).with_output_types(
-            MonitoringImage
-        )
-        | "With timestamps" >> beam.Map(add_timestamp)
+        | "Deserialize Protobuf" >> beam.ParDo(ParseMonitoringImage())
         | "Add Bounding Box Annotations" >> beam.ParDo(PredictBoundingBoxes(model_path))
     )
 
@@ -220,19 +209,19 @@ if __name__ == "__main__":
         )
     )
 
-    _ = fixed_window_view_by_key | "Write FixedWindow TFRecords" >> beam.ParDo(
-        WriteWindowedTFRecord(
-            args.base_gcs_path,
-        )
-    )
+    # _ = fixed_window_view_by_key | "Write FixedWindow TFRecords" >> beam.ParDo(
+    #     WriteWindowedTFRecord(
+    #         args.base_gcs_path,
+    #     )
+    # )
 
-    _ = fixed_window_view_by_key | "Write FixedWindow Parquet" >> beam.ParDo(
-        WriteWindowedParquet(
-            args.base_gcs_path,
-            NestedTelemetryEvent.pyarrow_schema(args.num_detections),
-            record_type="NestedTelemetryEvent/parquet",
-        )
-    )
+    # _ = fixed_window_view_by_key | "Write FixedWindow Parquet" >> beam.ParDo(
+    #     WriteWindowedParquet(
+    #         args.base_gcs_path,
+    #         NestedTelemetryEvent.pyarrow_schema(args.num_detections),
+    #         record_type="NestedTelemetryEvent/parquet",
+    #     )
+    # )
 
     # sliding_window_view = parsed_dataset | "Add sliding window" >> beam.WindowInto(
     #     beam.transforms.window.SlidingWindows(

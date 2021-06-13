@@ -31,9 +31,6 @@ jobs:
           .venv/bin/pip install --upgrade pip
           .venv/bin/pip install --upgrade setuptools wheel twine octoprint pip-tools
         # Runs a set of commands using the runners shell
-      - name: Test installation
-        run: |
-          .venv/bin/pip install --no-cache-dir install .
       - name: Install test dependencies
         run: |
           .venv/bin/pip install -r requirements-dev.txt

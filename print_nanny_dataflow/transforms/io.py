@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 from collections import Sequence
 from collections import OrderedDict
-from typing import Collection, Tuple, Any, Iterable, NamedTuple, List
+from typing import Collection, Tuple, Any, Iterable, NamedTuple, List, Optional
 import apache_beam as beam
 
 from google.protobuf.message import Message
@@ -13,6 +13,61 @@ from apache_beam.pvalue import PCollection
 from print_nanny_dataflow.coders.tfrecord_example import ExampleProtoEncoder
 
 logger = logging.getLogger(__name__)
+
+
+class TypedPathMixin:
+    """
+    Mixin support for an outpath conforming to:
+
+    gs://<bucket>/<base_path>/<module>.<class>/datesegment/key/<ext>/<window_start>_<window_end>
+
+    The key (typically a session uuid) is prepended to avoid sequential bottleneck when writing to GS backend
+    https://cloud.google.com/blog/products/gcp/optimizing-your-cloud-storage-performance-google-cloud-performance-atlas
+
+    Datesegment is calculated from session start time
+    """
+
+    def path(
+        self,
+        bucket: str,
+        base_path: str,
+        key: str,
+        datesegment: str,
+        module: str,
+        struct: str,
+        ext: str,
+        window: Optional[Tuple[int, int]] = None,
+    ) -> str:
+        """
+        Constructs output path from parts:
+
+        base_path: gs://bucket-name/dataflow/base/path/to/sinks/
+        key: session
+        classname: NestedTelemetryEvent
+        suffix: tfrecords
+
+        Results in:
+        gs://bucket-name/dataflow/base/path/to/sinks/<session>/<classname>/tfrecords/
+        """
+        if window is None:
+            return os.path.join(
+                bucket,
+                base_path,
+                f"{module}.{struct}",
+                datesegment,
+                key,
+                ext,
+            )
+        window_start, window_end = window
+        return os.path.join(
+            bucket,
+            base_path,
+            f"{module}.{struct}",
+            datesegment,
+            key,
+            ext,
+            f"{window_start}_{window_end}",
+        )
 
 
 class WriteWindowedTFRecord(beam.DoFn):
@@ -43,14 +98,14 @@ class WriteWindowedTFRecord(beam.DoFn):
 
     def process(
         self,
-        keyed_elements: Tuple[Any, List[Message]] = beam.DoFn.ElementParam,
+        keyed_elements: Tuple[Any, Iterable[Message]] = beam.DoFn.ElementParam,
         window=beam.DoFn.WindowParam,
     ) -> Iterable[Iterable[str]]:
         key, elements = keyed_elements
 
         window_start = int(window.start)
         window_end = int(window.end)
-        output = self.outpath(key, window_start, window_end, str(elements[0].__class__))
+        output = self.outpath(key, window_start, window_end, str(elements[0].__class__))  # type: ignore
 
         # coder = ExampleProtoEncoder(self.schema)
 
