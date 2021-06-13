@@ -64,7 +64,7 @@ def filter_area_of_interest(
     filtered_detection_scores = detection_scores[ignored_mask]
     filtered_detection_classes = detection_classes[ignored_mask]
 
-    num_detections = int(np.count_nonzero(ignored_mask))
+    num_detections = np.count_nonzero(ignored_mask)  # type: ignore
     annotations = BoxAnnotations(
         num_detections=num_detections,
         detection_scores=filtered_detection_scores,

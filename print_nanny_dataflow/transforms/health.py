@@ -22,7 +22,6 @@ from print_nanny_dataflow.coders.types import (
     NestedTelemetryEvent,
     WindowedHealthRecord,
     NestedWindowedHealthTrend,
-    DeviceCalibration,
     RenderVideoMessage,
     Metadata,
     NestedWindowedHealthTrend,

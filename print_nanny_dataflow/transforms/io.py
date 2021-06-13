@@ -70,7 +70,7 @@ class WriteWindowedTFRecord(beam.DoFn):
 SERIALIZE_FNS = {
     pd.DataFrame: lambda x: list(tuple(n) for n in x.itertuples(name=None)),
     pd.Series: lambda x: list(x),
-    np.polynomial.polynomial.Polynomial: lambda x: list(x),
+    np.polynomial.polynomial.Polynomial: lambda x: list(x),  # type: ignore
 }
 
 
