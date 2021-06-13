@@ -5,3 +5,4 @@ pip-tools
 nptyping
 data-science-types
 types-protobuf
+types-six
