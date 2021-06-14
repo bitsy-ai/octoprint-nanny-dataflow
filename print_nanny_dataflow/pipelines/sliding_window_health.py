@@ -36,19 +36,13 @@ if __name__ == "__main__":
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
-    parser.add_argument("--loglevel", default="INFO")
+    parser.add_argument("--loglevel", default="DEBUG")
     parser.add_argument("--project", default="print-nanny-sandbox")
 
     parser.add_argument(
-        "--topic",
-        default="monitoring-frame-raw",
-        help="PubSub topic",
-    )
-
-    parser.add_argument(
-        "--quiet",
-        default=False,
-        help="Enable quiet mode to only log results and supress alert sending",
+        "--subscription",
+        default="sliding-window-health",
+        help="PubSub subscription",
     )
 
     parser.add_argument(
@@ -58,14 +52,8 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--render-video-topic",
-        default="monitoring-video-render",
-        help="Video rendering and alert push jobs will be published to this PubSub topic",
-    )
-
-    parser.add_argument(
         "--base-gcs-path",
-        default="dataflow/telemetry_event/",
+        default="dataflow/sliding_window_health/",
         help="Base path for telemetry & monitoring event sinks",
     )
 
@@ -115,9 +103,8 @@ if __name__ == "__main__":
         project=args.project,
     )
 
-    input_topic_path = os.path.join("projects", args.project, "topics", args.topic)
-    output_topic_path = os.path.join(
-        "projects", args.project, "topics", args.render_video_topic
+    input_subscription_path = os.path.join(
+        "projects", args.project, "subscriptions", args.subscription
     )
 
     model_path = os.path.join("gs://", args.bucket, args.model_path, "model.tflite")
@@ -125,35 +112,24 @@ if __name__ == "__main__":
     p = beam.Pipeline(options=pipeline_options)
 
     # parse events from PubSub topic, add timestamp used in windowing functions, annotate with bounding boxes
-    parsed_dataset = (
+
+    parsed_dataset_by_session = (
         p
         | "Read TelemetryEvent"
-        >> beam.io.ReadFromPubSub(
-            topic=input_topic_path,
-        )
+        >> beam.io.ReadFromPubSub(subscription=input_subscription_path)
         | "Deserialize Protobuf" >> beam.ParDo(ParseMonitoringImage())
+        # keys by print session id
         | "Add Bounding Box Annotations" >> beam.ParDo(PredictBoundingBoxes(model_path))
     )
 
-    # key by session id
-    parsed_dataset_by_session = (
-        parsed_dataset
-        | "Key AnnotatedMonitoringImage by session id"
-        >> beam.Map(lambda x: (x.metadata.print_session, x))
-    )
-
-    fixed_window_view = (
+    fixed_window_view_by_key = (
         parsed_dataset_by_session
         | f"Add fixed window"
         >> beam.WindowInto(
             beam.transforms.window.FixedWindows(args.health_window_period)
         )
+        | "Group FixedWindow by key" >> beam.GroupByKey()
     )
-
-    fixed_window_view_by_key = (
-        fixed_window_view | "Group FixedWindow by key" >> beam.GroupByKey()
-    )
-
     _ = (
         fixed_window_view_by_key
         | "Calculate metrics over fixed window intervals"

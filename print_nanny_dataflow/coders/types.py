@@ -22,7 +22,6 @@ from print_nanny_client.flatbuffers.alert.AlertEventTypeEnum import AlertEventTy
 from print_nanny_client.flatbuffers.alert import Metadata as MetadataFB
 from print_nanny_client.flatbuffers.monitoring import MonitoringEvent
 
-from dataclasses import dataclass, asdict
 
 CATEGORY_INDEX = {
     0: {"name": "background", "id": 0, "health_weight": 0},

@@ -124,7 +124,7 @@ if __name__ == "__main__":
             VideoRenderRequest
         )
         | "Run render_video.sh"
-        >> beam.ParDo(RenderVideo(base_path=args.base_pth, bucket=args.bucket))
+        >> beam.ParDo(RenderVideo(base_path=args.base_path, bucket=args.bucket))
         | "Write to PubSub" >> beam.io.WriteToPubSub(output_topic_path)
     )
     result = p.run()

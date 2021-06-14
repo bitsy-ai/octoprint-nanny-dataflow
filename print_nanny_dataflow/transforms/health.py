@@ -1,4 +1,4 @@
-from typing import Tuple, Iterable, Optional, Any, NamedTuple
+from typing import Tuple, Iterable, Optional, Any, NamedTuple, NewType
 import logging
 from datetime import datetime
 import os
@@ -23,6 +23,14 @@ from print_nanny_dataflow.coders.types import get_health_weight
 from print_nanny_dataflow.metrics.area_of_interest import filter_area_of_interest
 
 
+MonitoringImageT = NewType("monitoring_pb2.MonitoringImage", MonitoringImage)
+AnnotatedMonitoringImageT = NewType(
+    "monitoring_pb2.AnnotatedMonitoringImage", AnnotatedMonitoringImage
+)
+BoxAnnotationsT = NewType("monitoring_pb2.BoxAnnotations", BoxAnnotations)
+DeviceCalibrationT = NewType("monitoring_pb2.BoxAnnotations", DeviceCalibration)
+BoxT = NewType("monitoring_pb2.Box", Box)
+
 logger = logging.getLogger(__name__)
 
 # def health_score_trend_polynomial_v1(
@@ -46,23 +54,23 @@ logger = logging.getLogger(__name__)
 
 
 @beam.typehints.with_input_types(bytes)
-@beam.typehints.with_output_types(MonitoringImage)
+@beam.typehints.with_output_types(MonitoringImageT)
 class ParseMonitoringImage(beam.DoFn):
-    def process(self, element: bytes) -> Iterable[MonitoringImage]:
+    def process(self, element: bytes) -> Iterable[MonitoringImageT]:
         parsed = MonitoringImage()
         parsed.ParseFromString(element)
         yield beam.window.TimestampedValue(parsed, parsed.metadata.ts)
 
 
-@beam.typehints.with_input_types(MonitoringImage)
-@beam.typehints.with_output_types(AnnotatedMonitoringImage)
+@beam.typehints.with_input_types(MonitoringImageT)
+@beam.typehints.with_output_types(Tuple[str, AnnotatedMonitoringImageT])
 class PredictBoundingBoxes(beam.DoFn):
     def __init__(self, gcs_model_path: str):
 
         self.gcs_model_path = gcs_model_path
 
-    @time_distribution("print_health", "predict_bounding_boxes_elapsed")
-    def process_timed(self, element: MonitoringImage) -> AnnotatedMonitoringImage:
+    @time_distribution("print_health", "tflite_predict_bounding_boxes_duration")
+    def process_timed(self, element: MonitoringImageT) -> AnnotatedMonitoringImageT:
         gcs = gcsio.GcsIO()
         with gcs.open(self.gcs_model_path) as f:
             tflite_interpreter = tf.lite.Interpreter(model_content=f.read())
@@ -81,10 +89,11 @@ class PredictBoundingBoxes(beam.DoFn):
         class_data = np.squeeze(class_data, axis=0).astype(np.int64) + 1
         box_data = np.squeeze(box_data, axis=0)
         score_data = np.squeeze(score_data, axis=0)
-        num_detections = np.squeeze(num_detections, axis=0)
+        num_detections = int(np.squeeze(num_detections, axis=0))
 
         detection_boxes = [Box(xy=b) for b in box_data]
         health_weights = map(get_health_weight, class_data)
+
         annotations = BoxAnnotations(
             num_detections=num_detections,
             detection_scores=score_data,
@@ -92,11 +101,13 @@ class PredictBoundingBoxes(beam.DoFn):
             detection_classes=class_data,
             health_weights=health_weights,
         )
-        return AnnotatedMonitoringImage(
+        return element.metadata.print_session.session, AnnotatedMonitoringImage(
             monitoring_image=element, annotations_all=annotations
         )
 
-    def process(self, element: MonitoringImage) -> Iterable[AnnotatedMonitoringImage]:
+    def process(
+        self, element: MonitoringImageT
+    ) -> Iterable[Tuple[str, AnnotatedMonitoringImageT]]:
         yield self.process_timed(element)
 
 

@@ -110,6 +110,7 @@ class WriteAnnotatedImage(TypedPathMixin, beam.DoFn):
         gcs_client = beam.io.gcp.gcsio.GcsIO()
 
         with gcs_client.open(outpath, "wb") as f:
+            logger.debug(f"Writing to {outpath}")
             f.write(img)
 
         yield key, outpath
