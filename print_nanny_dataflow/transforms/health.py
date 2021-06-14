@@ -19,17 +19,15 @@ from print_nanny_client.protobuf.monitoring_pb2 import (
     DeviceCalibration,
     Box,
 )
-from print_nanny_dataflow.coders.types import get_health_weight
-from print_nanny_dataflow.metrics.area_of_interest import filter_area_of_interest
-
-
-MonitoringImageT = NewType("monitoring_pb2.MonitoringImage", MonitoringImage)
-AnnotatedMonitoringImageT = NewType(
-    "monitoring_pb2.AnnotatedMonitoringImage", AnnotatedMonitoringImage
+from print_nanny_dataflow.coders.types import (
+    MonitoringImageT,
+    AnnotatedMonitoringImageT,
+    BoxAnnotationsT,
+    DeviceCalibrationT,
+    BoxT,
 )
-BoxAnnotationsT = NewType("monitoring_pb2.BoxAnnotations", BoxAnnotations)
-DeviceCalibrationT = NewType("monitoring_pb2.BoxAnnotations", DeviceCalibration)
-BoxT = NewType("monitoring_pb2.Box", Box)
+from print_nanny_dataflow.coders.types import get_health_weight
+from print_nanny_dataflow.metrics.area_of_interest import merge_filtered_annotations
 
 logger = logging.getLogger(__name__)
 
@@ -59,18 +57,18 @@ class ParseMonitoringImage(beam.DoFn):
     def process(self, element: bytes) -> Iterable[MonitoringImageT]:
         parsed = MonitoringImage()
         parsed.ParseFromString(element)
-        yield beam.window.TimestampedValue(parsed, parsed.metadata.ts)
+        yield parsed
 
 
 @beam.typehints.with_input_types(MonitoringImageT)
-@beam.typehints.with_output_types(Tuple[str, AnnotatedMonitoringImageT])
+@beam.typehints.with_output_types(AnnotatedMonitoringImageT)
 class PredictBoundingBoxes(beam.DoFn):
     def __init__(self, gcs_model_path: str):
 
         self.gcs_model_path = gcs_model_path
 
-    @time_distribution("print_health", "tflite_predict_bounding_boxes_duration")
-    def process_timed(self, element: MonitoringImageT) -> AnnotatedMonitoringImageT:
+    # @time_distribution("print_health", "tflite_predict_bounding_boxes_duration")
+    def process(self, element: MonitoringImageT) -> Iterable[AnnotatedMonitoringImageT]:
         gcs = gcsio.GcsIO()
         with gcs.open(self.gcs_model_path) as f:
             tflite_interpreter = tf.lite.Interpreter(model_content=f.read())
@@ -101,16 +99,18 @@ class PredictBoundingBoxes(beam.DoFn):
             detection_classes=class_data,
             health_weights=health_weights,
         )
-        return element.metadata.print_session.session, AnnotatedMonitoringImage(
+        yield AnnotatedMonitoringImage(
             monitoring_image=element, annotations_all=annotations
         )
 
-    def process(
-        self, element: MonitoringImageT
-    ) -> Iterable[Tuple[str, AnnotatedMonitoringImageT]]:
-        yield self.process_timed(element)
+    # def process(
+    #     self, element: MonitoringImageT
+    # ) -> Iterable[AnnotatedMonitoringImageT]:
+    #     yield self.process_timed(element)
 
 
+@beam.typehints.with_input_types(Tuple[str, Iterable[AnnotatedMonitoringImage]])
+@beam.typehints.with_output_types(AnnotatedMonitoringImage)
 class FilterBoxAnnotations(beam.DoFn):
     def __init__(
         self,
@@ -121,8 +121,8 @@ class FilterBoxAnnotations(beam.DoFn):
         self.calibration_filename = calibration_filename
 
     def load_calibration(
-        self, element: AnnotatedMonitoringImage
-    ) -> Optional[DeviceCalibration]:
+        self, element: AnnotatedMonitoringImageT
+    ) -> Optional[DeviceCalibrationT]:
         gcs_client = beam.io.gcp.gcsio.GcsIO()
         device_id = element.monitoring_image.metadata.octoprint_device_id
         device_calibration_path = os.path.join(
@@ -144,11 +144,7 @@ class FilterBoxAnnotations(beam.DoFn):
     ) -> Iterable[AnnotatedMonitoringImage]:
         session, elements = keyed_elements
         calibration = self.load_calibration(elements[0])
-        return session, (
-            elements
-            | beam.Map(
-                lambda x: filter_area_of_interest(x, calibration=calibration)
-                if calibration
-                else x
-            )
+        logger.info("Loaded calibration")
+        return elements | beam.Map(
+            lambda x: merge_filtered_annotations(x, calibration=calibration)
         )

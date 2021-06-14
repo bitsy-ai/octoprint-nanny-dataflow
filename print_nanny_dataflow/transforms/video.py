@@ -1,5 +1,5 @@
 from sys import modules
-from typing import Tuple, Iterable
+from typing import Tuple, Iterable, NewType
 import logging
 import io
 import os
@@ -10,16 +10,18 @@ from print_nanny_dataflow.utils.visualization import (
 from print_nanny_dataflow.coders.types import (
     CATEGORY_INDEX,
 )
+from print_nanny_dataflow.coders.types import AnnotatedMonitoringImageT
 from print_nanny_dataflow.transforms.io import TypedPathMixin
 from print_nanny_client.protobuf.monitoring_pb2 import AnnotatedMonitoringImage
 import PIL
-import pandas as pd
 import numpy as np
 
 
 logger = logging.getLogger(__name__)
 
 
+@beam.typehints.with_input_types(AnnotatedMonitoringImageT)
+@beam.typehints.with_output_types(bytes)
 class WriteAnnotatedImage(TypedPathMixin, beam.DoFn):
     def __init__(
         self,
@@ -46,8 +48,9 @@ class WriteAnnotatedImage(TypedPathMixin, beam.DoFn):
             raise ValueError(
                 f"Expecented NestedTelemetryEvent().image_data to be bytes, received None"
             )
-        if el.annotations_filtered is not None:
-            detection_boundary_mask = self.calibration["mask"]
+        if el.annotations_filtered.num_detections > 0:
+            # TODO re-enable boundary mask
+            # detection_boundary_mask = self.calibration["mask"]
             ignored_mask = np.invert(detection_boundary_mask)  # type: ignore
             detection_boxes = np.array(
                 b.xy for b in el.annotations_filtered.detection_boxes
@@ -62,7 +65,8 @@ class WriteAnnotatedImage(TypedPathMixin, beam.DoFn):
                 line_thickness=4,
                 min_score_thresh=self.score_threshold,
                 max_boxes_to_draw=self.max_boxes_to_draw,
-                detection_boundary_mask=detection_boundary_mask,
+                # TODO re-enable boundary mask
+                # detection_boundary_mask=detection_boundary_mask,
                 detection_box_ignored=ignored_mask,
             )
         else:
@@ -90,7 +94,7 @@ class WriteAnnotatedImage(TypedPathMixin, beam.DoFn):
         self,
         element: AnnotatedMonitoringImage,
     ) -> Iterable[Tuple[str, str]]:
-
+        logger.info(f"Processing WriteAnnotatedImage {element}")
         module = (
             f"{AnnotatedMonitoringImage.__module__}.{AnnotatedMonitoringImage.__name__}"
         )

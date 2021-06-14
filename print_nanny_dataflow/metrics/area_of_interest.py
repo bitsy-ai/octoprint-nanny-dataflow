@@ -1,13 +1,23 @@
+from __future__ import annotations
 from typing import Iterable, Tuple, Optional, Collection, List
 import numpy as np
+import logging
 
 from google.protobuf.internal.containers import RepeatedScalarFieldContainer
 from print_nanny_client.protobuf.monitoring_pb2 import (
+    AnnotatedMonitoringImage,
     DeviceCalibration,
     BoxAnnotations,
     Box,
 )
-from print_nanny_dataflow.coders.types import get_health_weight
+from print_nanny_dataflow.coders.types import (
+    BoxAnnotationsT,
+    get_health_weight,
+    AnnotatedMonitoringImageT,
+    DeviceCalibrationT,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def calc_percent_intersection(
@@ -53,10 +63,10 @@ def calc_percent_intersection(
 
 
 def filter_area_of_interest(
-    element: BoxAnnotations,
-    calibration: DeviceCalibration,
+    element: BoxAnnotationsT,
+    calibration: DeviceCalibrationT,
     min_calibration_area_overlap=0.75,
-) -> BoxAnnotations:
+) -> BoxAnnotationsT:
 
     percent_intersection = calc_percent_intersection(
         element.detection_boxes, calibration.coordinates
@@ -80,3 +90,17 @@ def filter_area_of_interest(
         health_weights=health_weights,
     )
     return annotations
+
+
+def merge_filtered_annotations(
+    element: AnnotatedMonitoringImageT, calibration: Optional[DeviceCalibrationT] = None
+) -> AnnotatedMonitoringImageT:
+    if calibration:
+        annotations_filtered = filter_area_of_interest(
+            element.annotations_all, calibration
+        )
+        msg = AnnotatedMonitoringImage(annotations_filtered=annotations_filtered)
+        logger.info("Merging annotations_filtered")
+        return element.MergeFrom(msg)
+    logger.info("No calibration detected, returning original")
+    return element

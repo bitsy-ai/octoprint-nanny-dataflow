@@ -1,7 +1,10 @@
 from time import time
+import logging
 from functools import wraps
 from apache_beam import DoFn
 from apache_beam.metrics import Metrics
+
+logger = logging.getLogger(__name__)
 
 
 def time_distribution(namespace, name):
@@ -32,6 +35,7 @@ class FixedWindowMetricStart(DoFn):
         self.seconds_elapsed_count = Metrics.counter(job_name, "seconds_elapsed")
 
     def process(self, element):
+        logger.info("Incrementing FixedWindowMetricStart")
         self.session_count.inc()
         self.seconds_elapsed_count.inc(self.window_period)
         yield element

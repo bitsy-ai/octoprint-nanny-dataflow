@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 from __future__ import absolute_import
+from print_nanny_dataflow.coders.types import AnnotatedMonitoringImageT
 
 import aiohttp
 import argparse
@@ -20,6 +21,7 @@ from print_nanny_dataflow.transforms.io import (
     WriteWindowedParquet,
 )
 from print_nanny_dataflow.transforms.health import (
+    MonitoringImageT,
     ParseMonitoringImage,
     PredictBoundingBoxes,
     FilterBoxAnnotations,
@@ -31,12 +33,19 @@ from print_nanny_dataflow.metrics import FixedWindowMetricStart, FixedWindowMetr
 
 logger = logging.getLogger(__name__)
 
+
+def add_timestamp(element: MonitoringImageT):
+    import apache_beam as beam
+
+    return beam.window.TimestampedValue(element, element.metadata.ts)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
-    parser.add_argument("--loglevel", default="DEBUG")
+    parser.add_argument("--loglevel", default="INFO")
     parser.add_argument("--project", default="print-nanny-sandbox")
 
     parser.add_argument(
@@ -118,8 +127,12 @@ if __name__ == "__main__":
         | "Read TelemetryEvent"
         >> beam.io.ReadFromPubSub(subscription=input_subscription_path)
         | "Deserialize Protobuf" >> beam.ParDo(ParseMonitoringImage())
-        # keys by print session id
+        | beam.Map(add_timestamp)
         | "Add Bounding Box Annotations" >> beam.ParDo(PredictBoundingBoxes(model_path))
+        | "Key by session"
+        >> beam.Map(
+            lambda x: (x.monitoring_image.metadata.print_session.session, x)
+        ).with_output_types(Tuple[str, AnnotatedMonitoringImageT])
     )
 
     fixed_window_view_by_key = (
@@ -130,11 +143,15 @@ if __name__ == "__main__":
         )
         | "Group FixedWindow by key" >> beam.GroupByKey()
     )
-    _ = (
-        fixed_window_view_by_key
-        | "Calculate metrics over fixed window intervals"
-        >> beam.ParDo(FixedWindowMetricStart(args.health_window_period, "print_health"))
+
+    fixed_window_view_by_key | beam.Map(
+        lambda key: print(f"Processed {len(key[1])} for session {key[0]}")
     )
+    # _ = (
+    #     fixed_window_view_by_key
+    #     | "Calculate metrics over fixed window intervals"
+    #     >> beam.ParDo(FixedWindowMetricStart(args.health_window_period, "print_health"))
+    # )
 
     _ = (
         fixed_window_view_by_key

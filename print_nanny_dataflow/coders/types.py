@@ -1,22 +1,22 @@
 from __future__ import annotations
-import json
 from enum import Enum
-from typing import Tuple, Dict, Any, NamedTuple, TypeVar, Generic, Optional
+from typing import Tuple, Dict, Any, NamedTuple, TypeVar, Generic, Optional, NewType
 import pandas as pd
 import numpy as np
 import nptyping as npt
 import tensorflow as tf
-import os
-import flatbuffers
 from tensorflow_transform.tf_metadata import schema_utils
 from tensorflow_transform.tf_metadata import dataset_metadata
 from tensorflow_metadata.proto.v0 import schema_pb2
 
 import pyarrow as pa
 
-from print_nanny_client.flatbuffers.alert import (
-    Alert,
-    AnnotatedVideo,
+from print_nanny_client.protobuf.monitoring_pb2 import (
+    MonitoringImage,
+    AnnotatedMonitoringImage,
+    BoxAnnotations,
+    DeviceCalibration,
+    Box,
 )
 from print_nanny_client.flatbuffers.alert.AlertEventTypeEnum import AlertEventTypeEnum
 from print_nanny_client.flatbuffers.alert import Metadata as MetadataFB
@@ -31,6 +31,21 @@ CATEGORY_INDEX = {
     4: {"name": "print", "id": 4, "health_weight": 1},
     5: {"name": "raftt", "id": 5, "health_weight": 1},
 }
+
+MonitoringImageT = NewType(
+    "print_nanny_client.protobuf.monitoring_pb2.MonitoringImage", MonitoringImage
+)
+AnnotatedMonitoringImageT = NewType(
+    "print_nanny_client.protobuf.monitoring_pb2.AnnotatedMonitoringImage",
+    AnnotatedMonitoringImage,
+)
+BoxAnnotationsT = NewType(
+    "print_nanny_client.protobuf.monitoring_pb2.BoxAnnotations", BoxAnnotations
+)
+DeviceCalibrationT = NewType(
+    "print_nanny_client.protobuf.monitoring_pb2.BoxAnnotations", DeviceCalibration
+)
+BoxT = NewType("print_nanny_client.protobuf.monitoring_pb2.Box", Box)
 
 
 def get_health_weight(label: int) -> float:
