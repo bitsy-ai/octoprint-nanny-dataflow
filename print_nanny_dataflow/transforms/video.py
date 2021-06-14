@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 @beam.typehints.with_input_types(AnnotatedMonitoringImageT)
-@beam.typehints.with_output_types(bytes)
+@beam.typehints.with_output_types(Tuple[str, str])
 class WriteAnnotatedImage(TypedPathMixin, beam.DoFn):
     def __init__(
         self,
@@ -94,7 +94,6 @@ class WriteAnnotatedImage(TypedPathMixin, beam.DoFn):
         self,
         element: AnnotatedMonitoringImage,
     ) -> Iterable[Tuple[str, str]]:
-        logger.info(f"Processing WriteAnnotatedImage {element}")
         module = (
             f"{AnnotatedMonitoringImage.__module__}.{AnnotatedMonitoringImage.__name__}"
         )

@@ -35,7 +35,6 @@ class FixedWindowMetricStart(DoFn):
         self.seconds_elapsed_count = Metrics.counter(job_name, "seconds_elapsed")
 
     def process(self, element):
-        logger.info("Incrementing FixedWindowMetricStart")
         self.session_count.inc()
         self.seconds_elapsed_count.inc(self.window_period)
         yield element

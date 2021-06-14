@@ -100,7 +100,5 @@ def merge_filtered_annotations(
             element.annotations_all, calibration
         )
         msg = AnnotatedMonitoringImage(annotations_filtered=annotations_filtered)
-        logger.info("Merging annotations_filtered")
         return element.MergeFrom(msg)
-    logger.info("No calibration detected, returning original")
     return element

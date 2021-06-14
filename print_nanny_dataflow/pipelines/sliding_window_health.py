@@ -147,11 +147,12 @@ if __name__ == "__main__":
     fixed_window_view_by_key | beam.Map(
         lambda key: print(f"Processed {len(key[1])} for session {key[0]}")
     )
-    # _ = (
-    #     fixed_window_view_by_key
-    #     | "Calculate metrics over fixed window intervals"
-    #     >> beam.ParDo(FixedWindowMetricStart(args.health_window_period, "print_health"))
-    # )
+
+    _ = (
+        fixed_window_view_by_key
+        | "Calculate metrics over fixed window intervals"
+        >> beam.ParDo(FixedWindowMetricStart(args.health_window_period, "print_health"))
+    )
 
     _ = (
         fixed_window_view_by_key
