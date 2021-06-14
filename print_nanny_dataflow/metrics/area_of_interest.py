@@ -12,7 +12,7 @@ from print_nanny_dataflow.coders.types import get_health_weight
 
 def calc_percent_intersection(
     detection_boxes: Collection[Box],
-    aoi_coords: RepeatedScalarFieldContainer[float],
+    aoi_coords: RepeatedScalarFieldContainer,
 ) -> Iterable:
     """
     Returns intersection-over-union area, normalized between 0 and 1
@@ -64,11 +64,10 @@ def filter_area_of_interest(
     ignored_mask = percent_intersection > min_calibration_area_overlap
 
     filtered_detection_boxes = [
-        Box(xy=b) for b in element.detection_boxes[ignored_mask]
+        b for i, b in enumerate(element.detection_boxes) if ignored_mask[i]
     ]
-
-    filtered_detection_scores = element.detection_scores[ignored_mask]
-    filtered_detection_classes = element.detection_classes[ignored_mask]
+    filtered_detection_scores = np.array(element.detection_scores)[ignored_mask]
+    filtered_detection_classes = np.array(element.detection_classes)[ignored_mask]
 
     num_detections = np.count_nonzero(ignored_mask)  # type: ignore
     health_weights = map(get_health_weight, filtered_detection_classes)
