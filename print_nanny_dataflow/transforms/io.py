@@ -63,51 +63,55 @@ class TypedPathMixin:
         )
 
 
-class WriteWindowedTFRecord(beam.DoFn):
+class WriteWindowedTFRecord(TypedPathMixin, beam.DoFn):
     """Output one TFRecord file per window per key"""
 
-    def __init__(self, base_path: str):
+    def __init__(
+        self,
+        base_path: str,
+        bucket: str,
+        module,
+        window_type: str,
+        ext: str = "tfrecord",
+    ):
         self.base_path = base_path
-
-    def outpath(self, key: str, window_start: int, window_end: int, klass: str) -> str:
-        """
-        Constructs output path from parts:
-
-        base_path: gs://bucket-name/dataflow/base/path/to/sinks/
-        key: session
-        classname: NestedTelemetryEvent
-        suffix: tfrecords
-
-        Results in:
-        gs://bucket-name/dataflow/base/path/to/sinks/<session>/<classname>/tfrecords/
-        """
-        return os.path.join(
-            self.base_path,
-            key,
-            klass,
-            "tfrecord",
-            f"{window_start}_{window_end}",
-        )
+        self.bucket = bucket
+        self.module = module
+        self.ext = ext
+        self.window_type = window_type
 
     def process(
         self,
         keyed_elements: Tuple[Any, Iterable[Message]] = beam.DoFn.ElementParam,
         window=beam.DoFn.WindowParam,
     ) -> Iterable[Iterable[str]]:
+
         key, elements = keyed_elements
+        element = elements[0]
 
         window_start = int(window.start)
         window_end = int(window.end)
-        output = self.outpath(key, window_start, window_end, str(elements[0].__class__))  # type: ignore
+        filename = f"{window_start}_{window_end}"
 
-        # coder = ExampleProtoEncoder(self.schema)
+        outpath = self.path(
+            bucket=self.bucket,
+            base_path=self.base_path,
+            key=key,
+            datesegment=element.monitoring_image.metadata.print_session.datesegment,
+            ext=self.ext,
+            filename=filename,
+            module=self.module,
+            window_type=self.window_type,
+        )
 
+        coder = beam.coders.coders.ProtoCoder(element.__class__)
         yield (
             elements
             | beam.io.tfrecordio.WriteToTFRecord(
-                file_path_prefix=output,
+                file_path_prefix=outpath,
                 num_shards=1,
                 shard_name_template="",
+                coder=coder,
                 file_name_suffix=".tfrecords.gz",
             )
         )

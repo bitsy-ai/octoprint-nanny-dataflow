@@ -21,10 +21,14 @@ from print_nanny_dataflow.transforms.io import (
     WriteWindowedParquet,
 )
 from print_nanny_dataflow.transforms.health import (
-    MonitoringImageT,
     ParseMonitoringImage,
     PredictBoundingBoxes,
     FilterBoxAnnotations,
+)
+
+from print_nanny_client.protobuf.monitoring_pb2 import (
+    MonitoringImage,
+    AnnotatedMonitoringImage,
 )
 
 from print_nanny_dataflow.transforms.video import WriteAnnotatedImage
@@ -34,7 +38,7 @@ from print_nanny_dataflow.metrics import FixedWindowMetricStart, FixedWindowMetr
 logger = logging.getLogger(__name__)
 
 
-def add_timestamp(element: MonitoringImageT):
+def add_timestamp(element: MonitoringImage):
     import apache_beam as beam
 
     return beam.window.TimestampedValue(element, element.metadata.ts)
@@ -169,21 +173,25 @@ if __name__ == "__main__":
                 bucket=args.bucket,
                 score_threshold=args.min_score_threshold,
                 max_boxes_to_draw=args.max_boxes_to_draw,
+                window_type=beam.transforms.window.FixedWindows.__name__,
             )
         )
     )
 
-    # _ = fixed_window_view_by_key | "Write FixedWindow TFRecords" >> beam.ParDo(
-    #     WriteWindowedTFRecord(
-    #         args.base_gcs_path,
-    #     )
-    # )
+    _ = fixed_window_view_by_key | "Write FixedWindow TFRecords" >> beam.ParDo(
+        WriteWindowedTFRecord(
+            base_path=args.base_gcs_path,
+            bucket=args.bucket,
+            module=f"{AnnotatedMonitoringImage.__module__}.{AnnotatedMonitoringImage.__name__}",
+            window_type=beam.transforms.window.FixedWindows.__name__,
+        )
+    )
 
     # _ = fixed_window_view_by_key | "Write FixedWindow Parquet" >> beam.ParDo(
     #     WriteWindowedParquet(
     #         args.base_gcs_path,
-    #         NestedTelemetryEvent.pyarrow_schema(args.num_detections),
-    #         record_type="NestedTelemetryEvent/parquet",
+    #         bucket=args.bucket,
+    #         module=f"{AnnotatedMonitoringImage.__module__}.{AnnotatedMonitoringImage.__name__}"
     #     )
     # )
 

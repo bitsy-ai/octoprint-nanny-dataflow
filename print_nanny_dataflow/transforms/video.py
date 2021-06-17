@@ -32,6 +32,9 @@ class WriteAnnotatedImage(TypedPathMixin, beam.DoFn):
         max_boxes_to_draw=10,
         window_type="fixed",
         ext="jpg",
+        module=(
+            f"{AnnotatedMonitoringImage.__module__}.{AnnotatedMonitoringImage.__name__}"
+        ),
     ):
         self.category_index = category_index
         self.score_threshold = score_threshold
@@ -40,6 +43,7 @@ class WriteAnnotatedImage(TypedPathMixin, beam.DoFn):
         self.bucket = bucket
         self.ext = ext
         self.window_type = window_type
+        self.module = module
 
     def annotate_image(self, el: AnnotatedMonitoringImage) -> bytes:
         if el.monitoring_image.data:
@@ -94,9 +98,6 @@ class WriteAnnotatedImage(TypedPathMixin, beam.DoFn):
         self,
         element: AnnotatedMonitoringImage,
     ) -> Iterable[Tuple[str, str]]:
-        module = (
-            f"{AnnotatedMonitoringImage.__module__}.{AnnotatedMonitoringImage.__name__}"
-        )
 
         key = element.monitoring_image.metadata.print_session.session
         outpath = self.path(
@@ -106,7 +107,7 @@ class WriteAnnotatedImage(TypedPathMixin, beam.DoFn):
             datesegment=element.monitoring_image.metadata.print_session.datesegment,
             ext=self.ext,
             filename=f"{element.monitoring_image.metadata.ts}.{self.ext}",
-            module=module,
+            module=self.module,
             window_type=self.window_type,
         )
         img = self.annotate_image(element)

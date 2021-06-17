@@ -52,23 +52,25 @@ logger = logging.getLogger(__name__)
 
 
 @beam.typehints.with_input_types(bytes)
-@beam.typehints.with_output_types(MonitoringImageT)
+@beam.typehints.with_output_types(MonitoringImage)
 class ParseMonitoringImage(beam.DoFn):
-    def process(self, element: bytes) -> Iterable[MonitoringImageT]:
+    def process(self, element: bytes) -> Iterable[MonitoringImage]:
         parsed = MonitoringImage()
         parsed.ParseFromString(element)
         yield parsed
 
 
-@beam.typehints.with_input_types(MonitoringImageT)
-@beam.typehints.with_output_types(AnnotatedMonitoringImageT)
+@beam.typehints.with_input_types(MonitoringImage)
+@beam.typehints.with_output_types(AnnotatedMonitoringImage)
 class PredictBoundingBoxes(beam.DoFn):
     def __init__(self, gcs_model_path: str):
 
         self.gcs_model_path = gcs_model_path
 
-    # @time_distribution("print_health", "tflite_predict_bounding_boxes_duration")
-    def process(self, element: MonitoringImageT) -> Iterable[AnnotatedMonitoringImageT]:
+    @time_distribution("print_health", "tflite_predict_bounding_boxes_duration")
+    def process_timed(
+        self, element: MonitoringImage
+    ) -> Iterable[AnnotatedMonitoringImage]:
         gcs = gcsio.GcsIO()
         with gcs.open(self.gcs_model_path) as f:
             tflite_interpreter = tf.lite.Interpreter(model_content=f.read())
@@ -99,14 +101,12 @@ class PredictBoundingBoxes(beam.DoFn):
             detection_classes=class_data,
             health_weights=health_weights,
         )
-        yield AnnotatedMonitoringImage(
+        return AnnotatedMonitoringImage(
             monitoring_image=element, annotations_all=annotations
         )
 
-    # def process(
-    #     self, element: MonitoringImageT
-    # ) -> Iterable[AnnotatedMonitoringImageT]:
-    #     yield self.process_timed(element)
+    def process(self, element: MonitoringImage) -> Iterable[AnnotatedMonitoringImage]:
+        yield self.process_timed(element)
 
 
 @beam.typehints.with_input_types(Tuple[str, Iterable[AnnotatedMonitoringImage]])
@@ -144,7 +144,6 @@ class FilterBoxAnnotations(beam.DoFn):
     ) -> Iterable[AnnotatedMonitoringImage]:
         session, elements = keyed_elements
         calibration = self.load_calibration(elements[0])
-        logger.info("Loaded calibration")
         return elements | beam.Map(
             lambda x: merge_filtered_annotations(x, calibration=calibration)
         )
