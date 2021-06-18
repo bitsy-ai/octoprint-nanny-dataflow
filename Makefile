@@ -43,7 +43,8 @@ pytest:
 	python -m pytest --disable-pytest-warnings
 
 pytest-coverage:
-	python -m pytest --cov=./ --cov-report=xml 
+	python -m pytest --cov=./ --cov-report=xml
+
 direct:
 	$(PYTHON) -m $(PIPELINE) \
 	--runner DirectRunner \
@@ -82,8 +83,24 @@ dataflow: clean docker-image sdist
 	--max_num_workers=$(MAX_NUM_WORKERS) \
 	--bucket=$(BUCKET) \
 	--extra_package=dist/print-nanny-dataflow-0.1.0.tar.gz \
+	--region=$(GCP_REGION)
+
+dataflow-upgrade: clean docker-image sdist
+	$(PYTHON) -m $(PIPELINE) \
+	--runner DataflowRunner \
+	--project=$(PROJECT) \
+	--experiment=use_runner_v2 \
+	--sdk_container_image=$(IMAGE) \
+	--temp_location=gs://$(BUCKET)/dataflow/tmp \
+	--job_name=$(JOB_NAME) \
+	​--setup_file=$(PWD)/setup.py \
+	--staging_location=gs://$(BUCKET)/dataflow/staging \
+	--streaming \
+	--max_num_workers=$(MAX_NUM_WORKERS) \
+	--bucket=$(BUCKET) \
+	--extra_package=dist/print-nanny-dataflow-0.1.0.tar.gz \
 	--region=$(GCP_REGION) \
-	--save_main_session
+	--upgrade
 
 lint:
 	$(PYTHON) -m black setup.py print_nanny_dataflow conftest.py tests
