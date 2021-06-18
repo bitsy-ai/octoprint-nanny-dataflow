@@ -30,7 +30,7 @@ class RenderVideo(TypedPathMixin, beam.DoFn):
             f"{AnnotatedMonitoringImage.__module__}.{AnnotatedMonitoringImage.__name__}"
         )
         key = msg.metadata.print_session.session
-        datesegment = (msg.metadata.print_session.datesegment,)
+        datesegment = msg.metadata.print_session.datesegment
 
         filename = "annotated_video.mp4"
         input_path = self.path(
