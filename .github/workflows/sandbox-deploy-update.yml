@@ -1,4 +1,4 @@
-name: Deploy to Sandbox
+name: Update Sandbox Deploy
 
 # Controls when the action will run. 
 on:

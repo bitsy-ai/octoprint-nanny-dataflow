@@ -1,4 +1,4 @@
-name: Deploy to Production
+name: Clean Stable Deploy
 
 # Controls when the action will run. 
 on:
