@@ -99,13 +99,18 @@ class WriteAnnotatedImage(TypedPathMixin, beam.DoFn):
     ) -> Iterable[Tuple[str, str]]:
 
         key = element.monitoring_image.metadata.print_session.session
+        datesegment = element.monitoring_image.metadata.print_session.datesegment
+        filename = f"{element.monitoring_image.metadata.ts}.{self.ext}"
+        import pdb
+
+        pdb.set_trace()
         outpath = self.path(
             bucket=self.bucket,
             base_path=self.base_path,
             key=key,
-            datesegment=element.monitoring_image.metadata.print_session.datesegment,
+            datesegment=datesegment,
             ext=self.ext,
-            filename=f"{element.monitoring_image.metadata.ts}.{self.ext}",
+            filename=filename,
             module=self.module,
             window_type=self.window_type,
         )

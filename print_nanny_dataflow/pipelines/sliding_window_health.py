@@ -58,6 +58,12 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "--topic",
+        default="MonitoringImage",
+        help="PubSub subscription",
+    )
+
+    parser.add_argument(
         "--bucket",
         default="print-nanny-sandbox",
         help="GCS Bucket",
@@ -115,9 +121,18 @@ if __name__ == "__main__":
         project=args.project,
     )
 
-    input_subscription_path = os.path.join(
-        "projects", args.project, "subscriptions", args.subscription
-    )
+    # use named subscription in dataflow runner
+    if args.runner == "DataflowRunner":
+        input_kwargs = dict(
+            subscription=os.path.join(
+                "projects", args.project, "subscriptions", args.subscription
+            )
+        )
+    # otherwise create a new subscription for topic
+    else:
+        input_kwargs = dict(
+            topic=os.path.join("projects", args.project, "topics", args.topic)
+        )
 
     model_path = os.path.join("gs://", args.bucket, args.model_path, "model.tflite")
 
@@ -127,8 +142,7 @@ if __name__ == "__main__":
 
     parsed_dataset_by_session = (
         p
-        | "Read TelemetryEvent"
-        >> beam.io.ReadFromPubSub(subscription=input_subscription_path)
+        | "Read TelemetryEvent" >> beam.io.ReadFromPubSub(**input_kwargs)
         | "Deserialize Protobuf" >> beam.ParDo(ParseMonitoringImage())
         | beam.Map(add_timestamp)
         | "Add Bounding Box Annotations" >> beam.ParDo(PredictBoundingBoxes(model_path))

@@ -2,16 +2,10 @@ import os
 import logging
 import pandas as pd
 import numpy as np
-from collections import Sequence
-from collections import OrderedDict
-from typing import Collection, Tuple, Any, Iterable, NamedTuple, List, Optional
+from typing import Tuple, Any, Iterable, NamedTuple
 import apache_beam as beam
 
-from google.protobuf.message import Message
 from print_nanny_client.protobuf.monitoring_pb2 import AnnotatedMonitoringImage
-from tensorflow_metadata.proto.v0 import schema_pb2
-from apache_beam.pvalue import PCollection
-from print_nanny_dataflow.coders.tfrecord_example import ExampleProtoEncoder
 
 logger = logging.getLogger(__name__)
 
