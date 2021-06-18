@@ -83,7 +83,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--health-window-period",
-        default=30,
+        default=60,
         help="Size of sliding event window slices (in seconds)",
     )
 
