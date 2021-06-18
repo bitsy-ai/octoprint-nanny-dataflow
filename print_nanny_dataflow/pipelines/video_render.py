@@ -86,7 +86,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--input-topic",
-        default="monitoring-video-render",
+        default="VideoRenderRequest",
         help="Video rendering jobs published to this PubSub topic",
     )
     parser.add_argument(
