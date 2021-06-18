@@ -11,22 +11,43 @@ import apache_beam as beam
 from apache_beam.options.pipeline_options import PipelineOptions
 
 from print_nanny_client.protobuf.alert_pb2 import VideoRenderRequest
+from print_nanny_client.protobuf.monitoring_pb2 import MonitoringImage
+from print_nanny_dataflow.transforms.io import TypedPathMixin
 import print_nanny_dataflow
 
 logger = logging.getLogger(__name__)
 
 
-class RenderVideo(beam.DoFn):
-    def __init__(self, input_path: str, output_path: str, bucket: str):
-        self.input_path = os.path.join("gs://", bucket, input_path)
-        self.output_path = os.path.join("gs://", bucket, output_path)
+class RenderVideo(TypedPathMixin, beam.DoFn):
+    def __init__(self, bucket: str, base_path: str):
         self.bucket = bucket
+        self.base_path = base_path
 
     def process(self, msg: VideoRenderRequest) -> Iterable[bytes]:
         path = os.path.dirname(print_nanny_dataflow.__file__)
         script = os.path.join(path, "scripts", "render_video.sh")
-        output_path = self.output_path.format(print_session=msg.print_session)
-        input_path = self.input_path.format(print_session=msg.print_session)
+        module = f"{MonitoringImage.__module__}.{MonitoringImage.__name__}"
+
+        filename = "annotated_video.mp4"
+        input_path = self.path(
+            bucket=self.bucket,
+            base_path=self.base_path,
+            key=msg.print_session.session,
+            datesegment=msg.print_session.datesegment,
+            module=module,
+            ext="jpg",
+            window_type="fixed",
+        )
+        output_path = self.path(
+            bucket=self.bucket,
+            base_path=self.base_path,
+            key=msg.print_session.session,
+            datesegment=msg.print_session.datesegment,
+            module=module,
+            ext="mp4",
+            filename=filename,
+            window_type="fixed",
+        )
         cdn_output_path = os.path.join("gs://", self.bucket, msg.cdn_output_path)
 
         val = subprocess.check_call(
@@ -35,7 +56,7 @@ class RenderVideo(beam.DoFn):
                 "-i",
                 input_path,
                 "-s",
-                msg.print_session,
+                msg.print_session.session,
                 "-o",
                 output_path,
                 "-c",
@@ -53,13 +74,8 @@ if __name__ == "__main__":
     parser.add_argument("--loglevel", default="INFO")
 
     parser.add_argument(
-        "--input-path",
-        default="dataflow/telemetry_event/{print_session}/NestedTelemetryEvent/jpg",
-    )
-
-    parser.add_argument(
-        "--output-path",
-        default="dataflow/telemetry_event/{print_session}/NestedTelemetryEvent/mp4",
+        "--base-path",
+        default="dataflow/monitoring",
     )
 
     parser.add_argument(
@@ -108,7 +124,7 @@ if __name__ == "__main__":
             VideoRenderRequest
         )
         | "Run render_video.sh"
-        >> beam.ParDo(RenderVideo(args.input_path, args.output_path, args.bucket))
+        >> beam.ParDo(RenderVideo(base_path=args.base_path, bucket=args.bucket))
         | "Write to PubSub" >> beam.io.WriteToPubSub(output_topic_path)
     )
     result = p.run()

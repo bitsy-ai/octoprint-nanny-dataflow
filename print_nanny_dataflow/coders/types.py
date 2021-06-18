@@ -1,28 +1,27 @@
 from __future__ import annotations
-import json
 from enum import Enum
-from typing import Tuple, Dict, Any, NamedTuple, TypeVar, Generic, Optional
+from typing import Tuple, Dict, Any, NamedTuple, TypeVar, Generic, Optional, NewType
 import pandas as pd
 import numpy as np
 import nptyping as npt
 import tensorflow as tf
-import os
-import flatbuffers
 from tensorflow_transform.tf_metadata import schema_utils
 from tensorflow_transform.tf_metadata import dataset_metadata
 from tensorflow_metadata.proto.v0 import schema_pb2
 
 import pyarrow as pa
 
-from print_nanny_client.flatbuffers.alert import (
-    Alert,
-    AnnotatedVideo,
+from print_nanny_client.protobuf.monitoring_pb2 import (
+    MonitoringImage,
+    AnnotatedMonitoringImage,
+    BoxAnnotations,
+    DeviceCalibration,
+    Box,
 )
 from print_nanny_client.flatbuffers.alert.AlertEventTypeEnum import AlertEventTypeEnum
 from print_nanny_client.flatbuffers.alert import Metadata as MetadataFB
 from print_nanny_client.flatbuffers.monitoring import MonitoringEvent
 
-from dataclasses import dataclass, asdict
 
 CATEGORY_INDEX = {
     0: {"name": "background", "id": 0, "health_weight": 0},
@@ -32,6 +31,10 @@ CATEGORY_INDEX = {
     4: {"name": "print", "id": 4, "health_weight": 1},
     5: {"name": "raftt", "id": 5, "health_weight": 1},
 }
+
+
+def get_health_weight(label: int) -> float:
+    return CATEGORY_INDEX[label].get("health_weight")  # type: ignore
 
 
 class WindowType(Enum):
@@ -62,102 +65,6 @@ class Metadata(NamedTuple):
             ("cloudiot_device_id", pa.int64()),
             ("window_start", pa.int64()),
             ("window_end", pa.int64()),
-        ]
-
-    @classmethod
-    def pyarrow_struct(cls):
-        return pa.struct(cls.pyarrow_fields())
-
-    @classmethod
-    def pyarrow_schema(cls):
-        return pa.schema(cls.pyarrow_fields())
-
-
-class RenderVideoMessage(NamedTuple):
-    metadata: Metadata
-    print_session: str
-    event_type: AlertEventTypeEnum.video_done
-    gcs_input: str
-    gcs_output: str
-    cdn_output: str
-    cdn_relative: str
-    bucket: str
-
-    def full_cdn_path(self):
-        return os.path.join("gs://", self.bucket, self.cdn_output)
-
-    def to_dict(self) -> Dict[str, Any]:
-        return self._asdict()
-
-    def to_bytes(self):
-        metadata = self.metadata.to_dict()
-        return (
-            pa.serialize(
-                dict(
-                    metadata=metadata,
-                    print_session=self.print_session,
-                    event_type=self.event_type,
-                    gcs_input=self.gcs_input,
-                    gcs_output=self.gcs_output,
-                    cdn_output=self.cdn_output,
-                    cdn_relative=self.cdn_relative,
-                    bucket=self.bucket,
-                )
-            )
-            .to_buffer()
-            .to_pybytes()
-        )
-
-    def to_flatbuffer(self) -> bytearray:
-        builder = flatbuffers.Builder(1024)
-        client_version = builder.CreateString(self.metadata.client_version)
-        print_session = builder.CreateString(self.metadata.print_session)
-
-        MetadataFB.MetadataStart(builder)
-        MetadataFB.MetadataAddUserId(builder, self.metadata.user_id)
-        MetadataFB.MetadataAddCloudiotDeviceId(
-            builder, self.metadata.cloudiot_device_id
-        )
-        MetadataFB.MetadataAddOctoprintDeviceId(
-            builder, self.metadata.octoprint_device_id
-        )
-        MetadataFB.MetadataAddClientVersion(builder, client_version)
-        MetadataFB.MetadataAddPrintSession(builder, print_session)
-        metadata = MetadataFB.MetadataEnd(builder)
-
-        gcs_input = builder.CreateString(self.gcs_input)
-        gcs_output = builder.CreateString(self.gcs_output)
-        cdn_output = builder.CreateString(self.cdn_output)
-        cdn_relative = builder.CreateString(self.cdn_relative)
-
-        AnnotatedVideo.AnnotatedVideoStart(builder)
-        AnnotatedVideo.AnnotatedVideoAddGcsInput(builder, gcs_input)
-        AnnotatedVideo.AnnotatedVideoAddGcsOutput(builder, gcs_output)
-        AnnotatedVideo.AnnotatedVideoAddCdnOutput(builder, cdn_output)
-        AnnotatedVideo.AnnotatedVideoAddCdnRelativePath(builder, cdn_relative)
-        annotated_video = AnnotatedVideo.AnnotatedVideoEnd(builder)
-
-        Alert.AlertStart(builder)
-        Alert.AlertAddEventType(builder, self.event_type)
-        Alert.AlertAddMetadata(builder, metadata)
-        Alert.AlertAddAnnotatedVideo(builder, annotated_video)
-        alert = Alert.AlertEnd(builder)
-        builder.Finish(alert)
-        return builder.Output()
-
-    @classmethod
-    def from_bytes(cls, pyarrow_bytes):
-        data = pa.deserialize(pyarrow_bytes)
-        data["metadata"] = Metadata(**data["metadata"])
-        return cls(**data)
-
-    @staticmethod
-    def pyarrow_fields():
-        return [
-            ("print_session", pa.string()),
-            ("metadata", Metadata.pyarrow_struct()),
-            ("event_type", pa.int32()),
-            ("filepattern", pa.string()),
         ]
 
     @classmethod

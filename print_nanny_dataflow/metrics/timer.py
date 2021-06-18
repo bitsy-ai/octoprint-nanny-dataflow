@@ -1,7 +1,10 @@
 from time import time
+import logging
 from functools import wraps
 from apache_beam import DoFn
 from apache_beam.metrics import Metrics
+
+logger = logging.getLogger(__name__)
 
 
 def time_distribution(namespace, name):

@@ -52,7 +52,7 @@ docopt==0.6.2
     # via hdfs
 fastavro==1.4.1
     # via apache-beam
-fasteners==0.16.2
+fasteners==0.16.3
     # via google-apitools
 flatbuffers==1.12
     # via tensorflow
@@ -101,7 +101,7 @@ google-cloud-bigquery==2.20.0
     # via apache-beam
 google-cloud-bigtable==1.7.0
     # via apache-beam
-google-cloud-core==1.6.0
+google-cloud-core==1.7.0
     # via
     #   apache-beam
     #   google-cloud-bigquery
@@ -211,7 +211,7 @@ pandas==1.2.4
     #   tfx-bsl
 pillow==8.2.0
     # via print-nanny-dataflow (setup.py)
-print-nanny-client==0.7.0.dev15
+print-nanny-client==0.7.0.dev24
     # via print-nanny-dataflow (setup.py)
 proto-plus==1.18.1
     # via google-cloud-bigquery

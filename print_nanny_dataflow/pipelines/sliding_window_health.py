@@ -13,53 +13,28 @@ import tarfile
 
 import apache_beam as beam
 from typing import List, Tuple, Any, Iterable, Generator, Coroutine, Optional, Union
-from apache_beam.options.pipeline_options import GoogleCloudOptions
 from apache_beam.options.pipeline_options import PipelineOptions
 
-from print_nanny_client.protobuf.monitoring_pb2 import MonitoringImage
 from print_nanny_dataflow.transforms.io import (
     WriteWindowedTFRecord,
     WriteWindowedParquet,
 )
 from print_nanny_dataflow.transforms.health import (
-    ExplodeWindowedHealthRecord,
+    ParseMonitoringImage,
     PredictBoundingBoxes,
     FilterBoxAnnotations,
 )
 
-from print_nanny_dataflow.transforms.video import WriteAnnotatedImage
-
-from print_nanny_dataflow.coders.types import (
-    NestedTelemetryEvent,
-    WindowedHealthRecord,
-    NestedWindowedHealthTrend,
+from print_nanny_client.protobuf.monitoring_pb2 import (
+    MonitoringImage,
+    AnnotatedMonitoringImage,
 )
 
+from print_nanny_dataflow.transforms.video import WriteAnnotatedImage
 from print_nanny_dataflow.metrics import FixedWindowMetricStart, FixedWindowMetricEnd
-
-from print_nanny_dataflow.clients.rest import RestAPIClient
 
 
 logger = logging.getLogger(__name__)
-
-
-async def download_active_experiment_model(model_dir=".tmp/", model_artifact_id=1):
-
-    tmp_artifacts_tarball = os.path.join(model_dir, "artifacts.tar.gz")
-    rest_client = RestAPIClient(api_token=args.api_token, api_url=args.api_url)
-
-    model_artifacts = await rest_client.get_model_artifact(model_artifact_id)
-
-    async with aiohttp.ClientSession() as session:
-        logger.info(f"Downloading model artfiact tarball")
-        async with session.get(model_artifacts.artifacts) as res:
-            artifacts_gzipped = await res.read()
-            with open(tmp_artifacts_tarball, "wb+") as f:
-                f.write(artifacts_gzipped)
-            logger.info(f"Finished writing {tmp_artifacts_tarball}")
-    with tarfile.open(tmp_artifacts_tarball, "r:gz") as tar:
-        tar.extractall(model_dir)
-    logger.info(f"Finished extracting {tmp_artifacts_tarball}")
 
 
 def add_timestamp(element: MonitoringImage):
@@ -77,15 +52,9 @@ if __name__ == "__main__":
     parser.add_argument("--project", default="print-nanny-sandbox")
 
     parser.add_argument(
-        "--topic",
-        default="monitoring-frame-raw",
-        help="PubSub topic",
-    )
-
-    parser.add_argument(
-        "--quiet",
-        default=False,
-        help="Enable quiet mode to only log results and supress alert sending",
+        "--subscription",
+        default="sliding-window-health",
+        help="PubSub subscription",
     )
 
     parser.add_argument(
@@ -95,14 +64,8 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--render-video-topic",
-        default="monitoring-video-render",
-        help="Video rendering and alert push jobs will be published to this PubSub topic",
-    )
-
-    parser.add_argument(
         "--base-gcs-path",
-        default="dataflow/telemetry_event/",
+        default="dataflow/sliding_window_health/",
         help="Base path for telemetry & monitoring event sinks",
     )
 
@@ -120,7 +83,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--health-window-period",
-        default=30,
+        default=60,
         help="Size of sliding event window slices (in seconds)",
     )
 
@@ -152,9 +115,8 @@ if __name__ == "__main__":
         project=args.project,
     )
 
-    input_topic_path = os.path.join("projects", args.project, "topics", args.topic)
-    output_topic_path = os.path.join(
-        "projects", args.project, "topics", args.render_video_topic
+    input_subscription_path = os.path.join(
+        "projects", args.project, "subscriptions", args.subscription
     )
 
     model_path = os.path.join("gs://", args.bucket, args.model_path, "model.tflite")
@@ -162,37 +124,31 @@ if __name__ == "__main__":
     p = beam.Pipeline(options=pipeline_options)
 
     # parse events from PubSub topic, add timestamp used in windowing functions, annotate with bounding boxes
-    parsed_dataset = (
+
+    parsed_dataset_by_session = (
         p
         | "Read TelemetryEvent"
-        >> beam.io.ReadFromPubSub(
-            topic=input_topic_path,
-        )
-        | "Deserialize Protobuf"
-        >> beam.Map(lambda b: MonitoringImage().ParseFromString(b)).with_output_types(
-            MonitoringImage
-        )
-        | "With timestamps" >> beam.Map(add_timestamp)
+        >> beam.io.ReadFromPubSub(subscription=input_subscription_path)
+        | "Deserialize Protobuf" >> beam.ParDo(ParseMonitoringImage())
+        | beam.Map(add_timestamp)
         | "Add Bounding Box Annotations" >> beam.ParDo(PredictBoundingBoxes(model_path))
+        | "Key by session"
+        >> beam.Map(
+            lambda x: (x.monitoring_image.metadata.print_session.session, x)
+        ).with_output_types(Tuple[str, AnnotatedMonitoringImage])
     )
 
-    # key by session id
-    parsed_dataset_by_session = (
-        parsed_dataset
-        | "Key AnnotatedMonitoringImage by session id"
-        >> beam.Map(lambda x: (x.metadata.print_session, x))
-    )
-
-    fixed_window_view = (
+    fixed_window_view_by_key = (
         parsed_dataset_by_session
         | f"Add fixed window"
         >> beam.WindowInto(
             beam.transforms.window.FixedWindows(args.health_window_period)
         )
+        | "Group FixedWindow by key" >> beam.GroupByKey()
     )
 
-    fixed_window_view_by_key = (
-        fixed_window_view | "Group FixedWindow by key" >> beam.GroupByKey()
+    fixed_window_view_by_key | beam.Map(
+        lambda key: print(f"Processed {len(key[1])} for session {key[0]}")
     )
 
     _ = (
@@ -212,27 +168,33 @@ if __name__ == "__main__":
         | "Write annotated jpgs"
         >> beam.ParDo(
             WriteAnnotatedImage(
-                args.base_gcs_path,
+                base_path=args.base_gcs_path,
+                bucket=args.bucket,
                 score_threshold=args.min_score_threshold,
                 max_boxes_to_draw=args.max_boxes_to_draw,
-                record_type="NestedTelemetryEvent/jpg",
+                window_type=beam.transforms.window.FixedWindows.__name__,
             )
         )
     )
 
+    # packed tfrecords for training dataset
     _ = fixed_window_view_by_key | "Write FixedWindow TFRecords" >> beam.ParDo(
         WriteWindowedTFRecord(
-            args.base_gcs_path,
+            base_path=args.base_gcs_path,
+            bucket=args.bucket,
+            module=f"{AnnotatedMonitoringImage.__module__}.{AnnotatedMonitoringImage.__name__}",
+            window_type=beam.transforms.window.FixedWindows.__name__,
         )
     )
 
-    _ = fixed_window_view_by_key | "Write FixedWindow Parquet" >> beam.ParDo(
-        WriteWindowedParquet(
-            args.base_gcs_path,
-            NestedTelemetryEvent.pyarrow_schema(args.num_detections),
-            record_type="NestedTelemetryEvent/parquet",
-        )
-    )
+    # explode nested arrays for analysis & indexing with hive
+    # _ = fixed_window_view_by_key | "Write FixedWindow Parquet" >> beam.ParDo(
+    #     WriteWindowedParquet(
+    #         args.base_gcs_path,
+    #         bucket=args.bucket,
+    #         module=f"{AnnotatedMonitoringImage.__module__}.{AnnotatedMonitoringImage.__name__}"
+    #     )
+    # )
 
     # sliding_window_view = parsed_dataset | "Add sliding window" >> beam.WindowInto(
     #     beam.transforms.window.SlidingWindows(

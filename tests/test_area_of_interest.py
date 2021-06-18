@@ -13,7 +13,7 @@ from print_nanny_dataflow.metrics.area_of_interest import (
 
 
 def test_object_in_aoi():
-    detection_boxes = [Box(xmin=0.3, ymin=0.3, xmax=0.9, ymax=0.9)]
+    detection_boxes = [Box(xy=[0.3, 0.3, 0.9, 0.9])]
     calibration_box = [0.2, 0.2, 0.8, 0.8]
     percent_area = calc_percent_intersection(detection_boxes, calibration_box)
     expected = (0.5 ** 2) / (0.6 ** 2)
@@ -21,7 +21,7 @@ def test_object_in_aoi():
 
 
 def test_object_not_in_aoi_1():
-    detection_boxes = [Box(xmin=0.3, ymin=0.3, xmax=0.9, ymax=0.9)]
+    detection_boxes = [Box(xy=[0.3, 0.3, 0.9, 0.9])]
     calibration_box = [0.1, 0.1, 0.2, 0.2]
     percent_area = calc_percent_intersection(detection_boxes, calibration_box)
     expected = 0.0
@@ -29,7 +29,7 @@ def test_object_not_in_aoi_1():
 
 
 def test_object_not_in_aoi_2():
-    detection_boxes = [Box(xmin=0.5, ymin=0.2, xmax=0.9, ymax=0.4)]
+    detection_boxes = [Box(xy=[0.5, 0.2, 0.9, 0.4])]
     calibration_box = [0.1, 0.7, 0.39, 0.8]
     percent_area = calc_percent_intersection(detection_boxes, calibration_box)
     expected = 0.0
@@ -37,7 +37,7 @@ def test_object_not_in_aoi_2():
 
 
 def test_object_in_aoi_full():
-    detection_boxes = [Box(xmin=0.2, ymin=0.2, xmax=0.8, ymax=0.8)]
+    detection_boxes = [Box(xy=[0.2, 0.2, 0.8, 0.8])]
     calibration_box = [0.1, 0.1, 0.9, 0.9]
     percent_area = calc_percent_intersection(detection_boxes, calibration_box)
     expected = 1.0
@@ -56,9 +56,7 @@ def test_filter_all_detections_by_aoi_0():
     detection_scores = np.linspace(0, threshold, num_detections)
     detection_classes = np.ones(num_detections, dtype=np.int32)
 
-    _detection_boxes = [
-        Box(xmin=b[0], ymin=b[1], xmax=b[2], ymax=b[3]) for b in detection_boxes
-    ]
+    _detection_boxes = [Box(xy=b) for b in detection_boxes]
     annotations = BoxAnnotations(
         detection_boxes=_detection_boxes,
         detection_scores=detection_scores,
@@ -85,9 +83,7 @@ def test_filter_all_detections_by_aoi_1():
     detection_scores = np.linspace(threshold + 0.1, 1, num_detections)
     detection_classes = np.ones(num_detections, dtype=np.int32)
 
-    _detection_boxes = [
-        Box(xmin=b[0], ymin=b[1], xmax=b[2], ymax=b[3]) for b in detection_boxes
-    ]
+    _detection_boxes = [Box(xy=b) for b in detection_boxes]
     annotations = BoxAnnotations(
         detection_boxes=_detection_boxes,
         detection_scores=detection_scores,
