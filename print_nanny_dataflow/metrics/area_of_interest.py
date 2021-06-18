@@ -76,7 +76,7 @@ def filter_area_of_interest(
     filtered_detection_scores = np.array(list(element.detection_scores))[ignored_mask]
     filtered_detection_classes = np.array(list(element.detection_classes))[ignored_mask]
 
-    num_detections = np.count_nonzero(ignored_mask)
+    num_detections = np.count_nonzero(ignored_mask)  # type: ignore
     health_weights = map(get_health_weight, filtered_detection_classes)
 
     annotations = BoxAnnotations(
