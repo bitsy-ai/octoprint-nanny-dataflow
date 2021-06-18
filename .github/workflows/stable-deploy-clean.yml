@@ -1,0 +1,57 @@
+name: Deploy to Production
+
+# Controls when the action will run. 
+on:
+  # Triggers the workflow on push or pull request events but only for the main branch
+  push:
+    branches: [ stable ]
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+env:
+  GCP_SERVICE_ACCOUNT_KEY: ${{ secrets.PROD_SERVICE_ACCOUNT_JSON }}
+  GCP_SERVICE_ACCOUNT:  ${{ secrets.PROD_SERVICE_ACCOUNT }}
+  GCP_PROJECT: print-nanny
+  DISCORD_WEBCOOK: ${{ secrets.PRINT_NANNY_DISCORD_DEPLOY_WEBHOOK }}
+  GOOGLE_APPLICATION_CREDENTIALS: key.json
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  # This workflow contains a single job called "build"
+  build:
+    # The type of runner that the job will run on
+    runs-on: ubuntu-latest
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - uses: actions/checkout@v2
+      - name: Set up Python virtualenv
+        run: |
+          python3 -m venv .venv
+      - name: Install virtualenv dependencies
+        run: |
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install --upgrade setuptools wheel twine octoprint pip-tools black
+        # Runs a set of commands using the runners shell
+      - name: Install lib dependencies
+        run: |
+          source .venv/bin/activate
+          pip install -r requirements.txt
+      - name: Write deploy key
+        run: echo $GCP_SERVICE_ACCOUNT_KEY > key.json
+      - name: Configue gcloud project
+        run: gcloud config set project $GCP_PROJECT
+      - name: Activate Service Account
+        run: gcloud auth activate-service-account $GCP_SERVICE_ACCOUNT --key-file=key.json
+      - name: Configure docker registry credentials
+        run: gcloud auth configure-docker
+
+      - name: Deploy Video Render Pipeline
+        run: |
+          source .venv/bin/activate
+          make dataflow-clean PROJECT=print-nanny PIPELINE=print_nanny_dataflow.pipelines.video_render JOB_NAME=video-render BUCKET=print-nanny-prod
+      - name: Deploy Sliding Health Pipeline
+        run: |
+          source .venv/bin/activate
+          make dataflow-clean PROJECT=print-nanny PIPELINE=print_nanny_dataflow.pipelines.sliding_window_health JOB_NAME=sliding-window-health BUCKET=print-nanny-prod

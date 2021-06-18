@@ -85,6 +85,11 @@ dataflow: clean docker-image sdist
 	--extra_package=dist/print-nanny-dataflow-0.1.0.tar.gz \
 	--region=$(GCP_REGION)
 
+dataflow-cancel:
+	gcloud dataflow jobs cancel $(JOB_NAME) --region=$(GCP_REGION)
+
+dataflow-clean: dataflow-cancel dataflow
+
 dataflow-upgrade: clean docker-image sdist
 	$(PYTHON) -m $(PIPELINE) \
 	--runner DataflowRunner \
