@@ -86,7 +86,8 @@ dataflow: clean docker-image sdist
 	--region=$(GCP_REGION)
 
 dataflow-cancel:
-	gcloud dataflow jobs cancel $(JOB_NAME) --region=$(GCP_REGION)
+	JOB_ID=$(shell gcloud dataflow jobs list --filter="name=$(JOB_NAME)" --status=active --format=json --region=$(GCP_REGION) | jq '.[].id')
+	gcloud dataflow jobs cancel $(JOB_ID) --region=$(GCP_REGION)
 
 dataflow-clean: dataflow-cancel dataflow
 
