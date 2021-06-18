@@ -90,7 +90,7 @@ class WriteWindowedTFRecord(TypedPathMixin, beam.DoFn):
     ) -> Iterable[Iterable[str]]:
 
         key, elements = keyed_elements
-        element = elements[0]  # type: ignore
+        element = elements[0]
 
         window_start = int(window.start)
         window_end = int(window.end)
