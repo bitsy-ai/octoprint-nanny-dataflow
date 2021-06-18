@@ -177,6 +177,7 @@ if __name__ == "__main__":
         )
     )
 
+    # packed tfrecords for training dataset
     _ = fixed_window_view_by_key | "Write FixedWindow TFRecords" >> beam.ParDo(
         WriteWindowedTFRecord(
             base_path=args.base_gcs_path,
@@ -186,6 +187,7 @@ if __name__ == "__main__":
         )
     )
 
+    # explode nested arrays for analysis & indexing with hive
     # _ = fixed_window_view_by_key | "Write FixedWindow Parquet" >> beam.ParDo(
     #     WriteWindowedParquet(
     #         args.base_gcs_path,
