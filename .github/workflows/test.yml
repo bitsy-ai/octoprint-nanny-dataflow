@@ -36,10 +36,12 @@ jobs:
           .venv/bin/pip install -r requirements-dev.txt
       - name: MyPy
         run: |
-          source .venv/bin/activate && make mypy
+          source .venv/bin/activate
+          make mypy
       - name: Generate code coverage report
         run: |
-          source .venv/bin/activate && make pytest-coverage
+          source .venv/bin/activate
+          make pytest-coverage
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v1
         with:
