@@ -90,7 +90,7 @@ dataflow-cancel:
 
 dataflow-clean: dataflow-cancel dataflow
 
-dataflow-upgrade: clean docker-image sdist
+dataflow-update: clean docker-image sdist
 	$(PYTHON) -m $(PIPELINE) \
 	--runner DataflowRunner \
 	--project=$(PROJECT) \
@@ -105,7 +105,7 @@ dataflow-upgrade: clean docker-image sdist
 	--bucket=$(BUCKET) \
 	--extra_package=dist/print-nanny-dataflow-0.1.0.tar.gz \
 	--region=$(GCP_REGION) \
-	--upgrade
+	--update
 
 lint:
 	$(PYTHON) -m black setup.py print_nanny_dataflow conftest.py tests
