@@ -8,6 +8,7 @@ from typing import Collection, Tuple, Any, Iterable, NamedTuple, List, Optional
 import apache_beam as beam
 
 from google.protobuf.message import Message
+from print_nanny_client.protobuf.monitoring_pb2 import AnnotatedMonitoringImage
 from tensorflow_metadata.proto.v0 import schema_pb2
 from apache_beam.pvalue import PCollection
 from print_nanny_dataflow.coders.tfrecord_example import ExampleProtoEncoder
@@ -82,7 +83,9 @@ class WriteWindowedTFRecord(TypedPathMixin, beam.DoFn):
 
     def process(
         self,
-        keyed_elements: Tuple[Any, Iterable[Message]] = beam.DoFn.ElementParam,
+        keyed_elements: Tuple[
+            Any, List[AnnotatedMonitoringImage]
+        ] = beam.DoFn.ElementParam,
         window=beam.DoFn.WindowParam,
     ) -> Iterable[Iterable[str]]:
 

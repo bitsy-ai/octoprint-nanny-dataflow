@@ -10,7 +10,6 @@ from print_nanny_dataflow.utils.visualization import (
 from print_nanny_dataflow.coders.types import (
     CATEGORY_INDEX,
 )
-from print_nanny_dataflow.coders.types import AnnotatedMonitoringImageT
 from print_nanny_dataflow.transforms.io import TypedPathMixin
 from print_nanny_client.protobuf.monitoring_pb2 import AnnotatedMonitoringImage
 import PIL
@@ -20,7 +19,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
-@beam.typehints.with_input_types(AnnotatedMonitoringImageT)
+@beam.typehints.with_input_types(AnnotatedMonitoringImage)
 @beam.typehints.with_output_types(Tuple[str, str])
 class WriteAnnotatedImage(TypedPathMixin, beam.DoFn):
     def __init__(

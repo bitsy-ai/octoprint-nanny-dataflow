@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 
 from __future__ import absolute_import
-from print_nanny_dataflow.coders.types import AnnotatedMonitoringImageT
 
 import aiohttp
 import argparse
@@ -136,7 +135,7 @@ if __name__ == "__main__":
         | "Key by session"
         >> beam.Map(
             lambda x: (x.monitoring_image.metadata.print_session.session, x)
-        ).with_output_types(Tuple[str, AnnotatedMonitoringImageT])
+        ).with_output_types(Tuple[str, AnnotatedMonitoringImage])
     )
 
     fixed_window_view_by_key = (

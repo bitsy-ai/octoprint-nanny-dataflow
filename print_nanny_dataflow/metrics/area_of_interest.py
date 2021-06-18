@@ -11,10 +11,7 @@ from print_nanny_client.protobuf.monitoring_pb2 import (
     Box,
 )
 from print_nanny_dataflow.coders.types import (
-    BoxAnnotationsT,
     get_health_weight,
-    AnnotatedMonitoringImageT,
-    DeviceCalibrationT,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,10 +60,10 @@ def calc_percent_intersection(
 
 
 def filter_area_of_interest(
-    element: BoxAnnotationsT,
-    calibration: DeviceCalibrationT,
+    element: BoxAnnotations,
+    calibration: DeviceCalibration,
     min_calibration_area_overlap=0.75,
-) -> BoxAnnotationsT:
+) -> BoxAnnotations:
 
     percent_intersection = calc_percent_intersection(
         element.detection_boxes, calibration.coordinates
@@ -93,12 +90,13 @@ def filter_area_of_interest(
 
 
 def merge_filtered_annotations(
-    element: AnnotatedMonitoringImageT, calibration: Optional[DeviceCalibrationT] = None
-) -> AnnotatedMonitoringImageT:
+    element: AnnotatedMonitoringImage, calibration: Optional[DeviceCalibration] = None
+) -> AnnotatedMonitoringImage:
     if calibration:
         annotations_filtered = filter_area_of_interest(
             element.annotations_all, calibration
         )
         msg = AnnotatedMonitoringImage(annotations_filtered=annotations_filtered)
-        return element.MergeFrom(msg)
+        element.MergeFrom(msg)
+        return element
     return element

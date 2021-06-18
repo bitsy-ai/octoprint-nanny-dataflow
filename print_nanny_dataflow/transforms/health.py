@@ -19,13 +19,7 @@ from print_nanny_client.protobuf.monitoring_pb2 import (
     DeviceCalibration,
     Box,
 )
-from print_nanny_dataflow.coders.types import (
-    MonitoringImageT,
-    AnnotatedMonitoringImageT,
-    BoxAnnotationsT,
-    DeviceCalibrationT,
-    BoxT,
-)
+
 from print_nanny_dataflow.coders.types import get_health_weight
 from print_nanny_dataflow.metrics.area_of_interest import merge_filtered_annotations
 
@@ -68,9 +62,7 @@ class PredictBoundingBoxes(beam.DoFn):
         self.gcs_model_path = gcs_model_path
 
     @time_distribution("print_health", "tflite_predict_bounding_boxes_duration")
-    def process_timed(
-        self, element: MonitoringImage
-    ) -> Iterable[AnnotatedMonitoringImage]:
+    def process_timed(self, element: MonitoringImage) -> AnnotatedMonitoringImage:
         gcs = gcsio.GcsIO()
         with gcs.open(self.gcs_model_path) as f:
             tflite_interpreter = tf.lite.Interpreter(model_content=f.read())
@@ -121,8 +113,8 @@ class FilterBoxAnnotations(beam.DoFn):
         self.calibration_filename = calibration_filename
 
     def load_calibration(
-        self, element: AnnotatedMonitoringImageT
-    ) -> Optional[DeviceCalibrationT]:
+        self, element: AnnotatedMonitoringImage
+    ) -> Optional[DeviceCalibration]:
         gcs_client = beam.io.gcp.gcsio.GcsIO()
         device_id = element.monitoring_image.metadata.octoprint_device_id
         device_calibration_path = os.path.join(

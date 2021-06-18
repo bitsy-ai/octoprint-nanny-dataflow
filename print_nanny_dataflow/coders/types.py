@@ -32,21 +32,6 @@ CATEGORY_INDEX = {
     5: {"name": "raftt", "id": 5, "health_weight": 1},
 }
 
-MonitoringImageT = NewType(
-    "print_nanny_client.protobuf.monitoring_pb2.MonitoringImage", MonitoringImage
-)
-AnnotatedMonitoringImageT = NewType(
-    "print_nanny_client.protobuf.monitoring_pb2.AnnotatedMonitoringImage",
-    AnnotatedMonitoringImage,
-)
-BoxAnnotationsT = NewType(
-    "print_nanny_client.protobuf.monitoring_pb2.BoxAnnotations", BoxAnnotations
-)
-DeviceCalibrationT = NewType(
-    "print_nanny_client.protobuf.monitoring_pb2.BoxAnnotations", DeviceCalibration
-)
-BoxT = NewType("print_nanny_client.protobuf.monitoring_pb2.Box", Box)
-
 
 def get_health_weight(label: int) -> float:
     return CATEGORY_INDEX[label].get("health_weight")  # type: ignore
