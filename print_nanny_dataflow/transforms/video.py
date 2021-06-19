@@ -1,5 +1,4 @@
-from sys import modules
-from typing import Tuple, Iterable, NewType
+from typing import Tuple, Iterable
 import logging
 import io
 import os
@@ -12,11 +11,36 @@ from print_nanny_dataflow.coders.types import (
 )
 from print_nanny_dataflow.transforms.io import TypedPathMixin
 from print_nanny_client.protobuf.monitoring_pb2 import AnnotatedMonitoringImage
+from print_nanny_client.protobuf.alert_pb2 import VideoRenderRequest
 import PIL
 import numpy as np
 
 
 logger = logging.getLogger(__name__)
+
+
+@beam.typehints.with_input_types(bytes)
+@beam.typehints.with_output_types(VideoRenderRequest)
+class DecodeVideoRenderRequest(beam.DoFn):
+    def process(self, element: bytes) -> Iterable[VideoRenderRequest]:
+        parsed = VideoRenderRequest()
+        parsed.ParseFromString(element)
+        yield parsed
+
+
+@beam.typehints.with_input_types(AnnotatedMonitoringImage)
+@beam.typehints.with_output_types(bytes)
+class EncodeVideoRenderRequest(beam.DoFn):
+    def process(self, element: AnnotatedMonitoringImage) -> Iterable[bytes]:
+        datesegment = element.monitoring_image.metadata.print_session.datesegment
+        key = element.monitoring_image.metadata.print_session.session
+        cdn_output_path = os.path.join(
+            "media/uploads/PrintSessionAlert", datesegment, key
+        )
+        msg = VideoRenderRequest(
+            cdn_output_path=cdn_output_path, metadata=element.monitoring_image.metadata
+        )
+        yield msg.SerializeToString()
 
 
 @beam.typehints.with_input_types(AnnotatedMonitoringImage)
@@ -99,13 +123,13 @@ class WriteAnnotatedImage(TypedPathMixin, beam.DoFn):
     ) -> Iterable[Tuple[str, str]]:
 
         key = element.monitoring_image.metadata.print_session.session
-        # datesegment = element.monitoring_image.metadata.print_session.datesegment
+        datesegment = element.monitoring_image.metadata.print_session.datesegment
         filename = f"{element.monitoring_image.metadata.ts}.{self.ext}"
         outpath = self.path(
             bucket=self.bucket,
             base_path=self.base_path,
             key=key,
-            # datesegment=datesegment,
+            datesegment=datesegment,
             ext=self.ext,
             filename=filename,
             module=self.module,

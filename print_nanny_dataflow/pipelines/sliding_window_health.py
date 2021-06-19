@@ -19,6 +19,7 @@ from print_nanny_dataflow.transforms.io import (
     WriteWindowedTFRecord,
     WriteWindowedParquet,
 )
+from print_nanny_dataflow.transforms.video import EncodeVideoRenderRequest
 from print_nanny_dataflow.transforms.health import (
     ParseMonitoringImage,
     PredictBoundingBoxes,
@@ -58,8 +59,14 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--topic",
+        "--input-topic",
         default="MonitoringImage",
+        help="PubSub subscription",
+    )
+
+    parser.add_argument(
+        "--output-topic",
+        default="VideoRenderRequest",
         help="PubSub subscription",
     )
 
@@ -131,9 +138,12 @@ if __name__ == "__main__":
     # otherwise create a new subscription for topic
     else:
         input_kwargs = dict(
-            topic=os.path.join("projects", args.project, "topics", args.topic)
+            topic=os.path.join("projects", args.project, "topics", args.input_topic)
         )
 
+    output_topic_path = os.path.join(
+        "projects", args.project, "topics", args.output_topic
+    )
     model_path = os.path.join("gs://", args.bucket, args.model_path, "model.tflite")
 
     p = beam.Pipeline(options=pipeline_options)
@@ -201,6 +211,23 @@ if __name__ == "__main__":
         )
     )
 
+    # render video after session is finished
+    session_gap = args.health_window_period * 1.5
+    session_accumulating_dataframe = (
+        parsed_dataset_by_session
+        | beam.WindowInto(
+            beam.transforms.window.Sessions(session_gap),
+            # TODO re-enable with MonitorHealthStateful
+            # trigger=alert_pipeline_trigger,
+            accumulation_mode=beam.transforms.trigger.AccumulationMode.DISCARDING,
+        )
+        | "Create RenderVideoRequest" >> beam.GroupByKey()
+        | beam.Map(lambda x: x[1][0])
+        | beam.ParDo(EncodeVideoRenderRequest())
+        | beam.io.WriteToPubSub(topic=output_topic_path)
+        # | "Stateful health score threshold monitor"
+        # >> beam.ParDo(MonitorHealthStateful(output_topic_path))
+    )
     # explode nested arrays for analysis & indexing with hive
     # _ = fixed_window_view_by_key | "Write FixedWindow Parquet" >> beam.ParDo(
     #     WriteWindowedParquet(

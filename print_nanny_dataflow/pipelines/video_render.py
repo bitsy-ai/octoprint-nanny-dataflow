@@ -13,6 +13,7 @@ from apache_beam.options.pipeline_options import PipelineOptions
 from print_nanny_client.protobuf.alert_pb2 import VideoRenderRequest
 from print_nanny_client.protobuf.monitoring_pb2 import AnnotatedMonitoringImage
 from print_nanny_dataflow.transforms.io import TypedPathMixin
+from print_nanny_dataflow.transforms.video import DecodeVideoRenderRequest
 import print_nanny_dataflow
 
 logger = logging.getLogger(__name__)
@@ -37,20 +38,20 @@ class RenderVideo(TypedPathMixin, beam.DoFn):
             bucket=self.bucket,
             base_path=self.base_path,
             key=key,
-            datesegment=datesegment,
             module=module,
             ext="jpg",
             window_type="FixedWindows",
+            datesegment=datesegment,
         )
         output_path = self.path(
             bucket=self.bucket,
             base_path=self.base_path,
             key=key,
-            datesegment=datesegment,
             module=module,
             ext="mp4",
             filename=filename,
             window_type="FixedWindows",
+            datesegment=datesegment,
         )
         cdn_output_path = os.path.join("gs://", self.bucket, msg.cdn_output_path)
 
@@ -59,8 +60,6 @@ class RenderVideo(TypedPathMixin, beam.DoFn):
                 script,
                 "-i",
                 input_path,
-                "-s",
-                msg.print_session.session,
                 "-o",
                 output_path,
                 "-c",
@@ -69,15 +68,6 @@ class RenderVideo(TypedPathMixin, beam.DoFn):
         )
         logger.info(val)
         yield msg.SerializeToString()
-
-
-@beam.typehints.with_input_types(bytes)
-@beam.typehints.with_output_types(VideoRenderRequest)
-class DecodeVideoRenderRequest(beam.DoFn):
-    def process(self, element: bytes) -> Iterable[VideoRenderRequest]:
-        parsed = VideoRenderRequest()
-        parsed.ParseFromString(element)
-        yield parsed
 
 
 if __name__ == "__main__":
