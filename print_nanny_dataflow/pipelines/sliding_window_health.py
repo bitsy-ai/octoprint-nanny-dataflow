@@ -14,6 +14,7 @@ import tarfile
 import apache_beam as beam
 from typing import List, Tuple, Any, Iterable, Generator, Coroutine, Optional, Union
 from apache_beam.options.pipeline_options import PipelineOptions
+from apache_beam.metrics import Metrics
 
 from print_nanny_dataflow.transforms.io import (
     WriteWindowedTFRecord,
@@ -42,6 +43,63 @@ def add_timestamp(element: MonitoringImage):
     import apache_beam as beam
 
     return beam.window.TimestampedValue(element, element.metadata.ts)
+
+
+class OnWindowTrigger(beam.DoFn):
+    def __init__(
+        self,
+        output_topic_path: str,
+        calibration_base_path: str,
+        min_score_threshold: float,
+        max_boxes_to_draw: int,
+        job_name: str = "sliding-window-health",
+    ):
+        self.output_topic_path = output_topic_path
+        self.calibration_base_path = calibration_base_path
+        self.min_score_threshold = min_score_threshold
+        self.max_boxes_to_draw = max_boxes_to_draw
+        self.job_name = job_name
+        self.session_count = Metrics.counter(job_name, "session_count")
+        self.seconds_elapsed_count = Metrics.counter(job_name, "seconds_elapsed")
+
+    def process(
+        self,
+        keyed_elements: Tuple[str, Iterable[AnnotatedMonitoringImage]],
+        window=beam.DoFn.WindowParam,
+        pane_info=beam.DoFn.PaneInfoParam,
+    ):
+        key, elements = keyed_elements
+        logger.info(pane_info)
+        self.seconds_elapsed_count.inc(float(window.end - window.start))
+        if pane_info.is_first:
+            self.session_count.inc()
+
+        if pane_info.is_last:
+            self.session_count.dec()
+            yield (
+                "Create RenderVideoRequest" >> elements[0]
+                | beam.ParDo(EncodeVideoRenderRequest())
+                | beam.io.WriteToPubSub(topic=self.output_topic_path)
+            )
+        else:
+            return (
+                elements
+                | beam.ParDo(
+                    FilterBoxAnnotations(
+                        calibration_base_path,
+                    )
+                )
+                | "Write annotated jpgs"
+                >> beam.ParDo(
+                    WriteAnnotatedImage(
+                        base_path=args.base_gcs_path,
+                        bucket=args.bucket,
+                        score_threshold=args.min_score_threshold,
+                        max_boxes_to_draw=args.max_boxes_to_draw,
+                        window_type=beam.transforms.window.FixedWindows.__name__,
+                    )
+                )
+            )
 
 
 if __name__ == "__main__":
@@ -106,6 +164,12 @@ if __name__ == "__main__":
         help="Max number of bounding boxes output by nms operation",
     )
 
+    parser.add_argument(
+        "--buffer-limit",
+        default=20,
+        help="Max number of bounding boxes output by nms operation",
+    )
+
     parser.add_argument("--min-score-threshold", default=0.66)
 
     parser.add_argument("--max-boxes-to-draw", default=5)
@@ -162,69 +226,81 @@ if __name__ == "__main__":
         ).with_output_types(Tuple[str, AnnotatedMonitoringImage])
     )
 
-    fixed_window_view_by_key = (
-        parsed_dataset_by_session
-        | f"Add fixed window"
-        >> beam.WindowInto(
-            beam.transforms.window.FixedWindows(args.health_window_period)
-        )
-        | "Group FixedWindow by key" >> beam.GroupByKey()
-    )
+    # fixed_window_view_by_key = (
+    #     parsed_dataset_by_session
+    #     | f"Add fixed window"
+    #     >> beam.WindowInto(
+    #         beam.transforms.window.FixedWindows(args.health_window_period)
+    #     )
+    #     | "Group FixedWindow by key" >> beam.GroupByKey()
+    # )
 
-    fixed_window_view_by_key | beam.Map(
-        lambda key: print(f"Processed {len(key[1])} for session {key[0]}")
-    )
+    # fixed_window_view_by_key | beam.Map(
+    #     lambda key: print(f"Processed {len(key[1])} for session {key[0]}")
+    # )
 
-    _ = (
-        fixed_window_view_by_key
-        | "Calculate metrics over fixed window intervals"
-        >> beam.ParDo(FixedWindowMetricStart(args.health_window_period, "print_health"))
-    )
+    # _ = (
+    #     fixed_window_view_by_key
+    #     | "Calculate metrics over fixed window intervals"
+    #     >> beam.ParDo(FixedWindowMetricStart(args.health_window_period, "print_health"))
+    # )
 
-    _ = (
-        fixed_window_view_by_key
-        | "Filter area of interest and detections above threshold"
-        >> beam.ParDo(
-            FilterBoxAnnotations(
-                calibration_base_path,
-            )
-        )
-        | "Write annotated jpgs"
-        >> beam.ParDo(
-            WriteAnnotatedImage(
-                base_path=args.base_gcs_path,
-                bucket=args.bucket,
-                score_threshold=args.min_score_threshold,
-                max_boxes_to_draw=args.max_boxes_to_draw,
-                window_type=beam.transforms.window.FixedWindows.__name__,
-            )
-        )
-    )
+    # _ = (
+    #     fixed_window_view_by_key
+    #     | "Filter area of interest and detections above threshold"
+    #     >> beam.ParDo(
+    #         FilterBoxAnnotations(
+    #             calibration_base_path,
+    #         )
+    #     )
+    #     | "Write annotated jpgs"
+    #     >> beam.ParDo(
+    #         WriteAnnotatedImage(
+    #             base_path=args.base_gcs_path,
+    #             bucket=args.bucket,
+    #             score_threshold=args.min_score_threshold,
+    #             max_boxes_to_draw=args.max_boxes_to_draw,
+    #             window_type=beam.transforms.window.FixedWindows.__name__,
+    #         )
+    #     )
+    # )
 
-    # packed tfrecords for training dataset
-    _ = fixed_window_view_by_key | "Write FixedWindow TFRecords" >> beam.ParDo(
-        WriteWindowedTFRecord(
-            base_path=args.base_gcs_path,
-            bucket=args.bucket,
-            module=f"{AnnotatedMonitoringImage.__module__}.{AnnotatedMonitoringImage.__name__}",
-            window_type=beam.transforms.window.FixedWindows.__name__,
-        )
-    )
+    # # packed tfrecords for training dataset
+    # _ = fixed_window_view_by_key | "Write FixedWindow TFRecords" >> beam.ParDo(
+    #     WriteWindowedTFRecord(
+    #         base_path=args.base_gcs_path,
+    #         bucket=args.bucket,
+    #         module=f"{AnnotatedMonitoringImage.__module__}.{AnnotatedMonitoringImage.__name__}",
+    #         window_type=beam.transforms.window.FixedWindows.__name__,
+    #     )
+    # )
 
     # render video after session is finished
-    session_gap = args.health_window_period * 1.5
+    session_gap = args.health_window_period
+    trigger_fn = beam.transforms.trigger.Repeatedly(
+        beam.transforms.trigger.AfterAny(
+            beam.transforms.trigger.AfterCount(args.buffer_limit),
+            beam.transforms.trigger.AfterProcessingTime(args.health_window_period),
+            beam.transforms.trigger.AfterWatermark(),
+        )
+    )
     session_accumulating_dataframe = (
         parsed_dataset_by_session
         | beam.WindowInto(
             beam.transforms.window.Sessions(session_gap),
             # TODO re-enable with MonitorHealthStateful
-            # trigger=alert_pipeline_trigger,
+            trigger=trigger_fn,
             accumulation_mode=beam.transforms.trigger.AccumulationMode.DISCARDING,
         )
-        | "Create RenderVideoRequest" >> beam.GroupByKey()
-        | beam.Map(lambda x: x[1][0])
-        | beam.ParDo(EncodeVideoRenderRequest())
-        | beam.io.WriteToPubSub(topic=output_topic_path)
+        | beam.GroupByKey()
+        | beam.ParDo(
+            OnWindowTrigger(
+                output_topic_path=output_topic_path,
+                calibration_base_path=calibration_base_path,
+                min_score_threshold=args.min_score_threshold,
+                max_boxes_to_draw=args.max_boxes_to_draw,
+            )
+        )
         # | "Stateful health score threshold monitor"
         # >> beam.ParDo(MonitorHealthStateful(output_topic_path))
     )

@@ -101,7 +101,7 @@ class PredictBoundingBoxes(beam.DoFn):
         yield self.process_timed(element)
 
 
-@beam.typehints.with_input_types(Tuple[str, Iterable[AnnotatedMonitoringImage]])
+@beam.typehints.with_input_types(AnnotatedMonitoringImage)
 @beam.typehints.with_output_types(AnnotatedMonitoringImage)
 class FilterBoxAnnotations(beam.DoFn):
     def __init__(
@@ -132,10 +132,7 @@ class FilterBoxAnnotations(beam.DoFn):
 
     def process(
         self,
-        keyed_elements=Tuple[str, Iterable[AnnotatedMonitoringImage]],
+        element=AnnotatedMonitoringImage,
     ) -> Iterable[AnnotatedMonitoringImage]:
-        session, elements = keyed_elements
-        calibration = self.load_calibration(elements[0])
-        return elements | beam.Map(
-            lambda x: merge_filtered_annotations(x, calibration=calibration)
-        )
+        calibration = self.load_calibration(element)
+        return merge_filtered_annotations(element, calibration=calibration)

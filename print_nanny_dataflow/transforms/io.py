@@ -50,7 +50,7 @@ class TypedPathMixin:
             bucket,
             base_path,
             module,
-            window_type,
+            # window_type,
             datesegment,
             key,
             ext,
