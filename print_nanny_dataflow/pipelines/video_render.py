@@ -53,7 +53,9 @@ class RenderVideo(TypedPathMixin, beam.DoFn):
             window_type="FixedWindows",
             datesegment=datesegment,
         )
-        cdn_output_path = os.path.join("gs://", self.bucket, msg.cdn_output_path)
+        cdn_output_path = os.path.join(
+            "gs://", self.bucket, msg.cdn_output_path, filename
+        )
 
         val = subprocess.check_call(
             [
