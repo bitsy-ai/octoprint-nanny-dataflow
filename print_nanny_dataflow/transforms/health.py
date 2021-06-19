@@ -135,4 +135,4 @@ class FilterBoxAnnotations(beam.DoFn):
         element=AnnotatedMonitoringImage,
     ) -> Iterable[AnnotatedMonitoringImage]:
         calibration = self.load_calibration(element)
-        return merge_filtered_annotations(element, calibration=calibration)
+        yield merge_filtered_annotations(element, calibration=calibration)
