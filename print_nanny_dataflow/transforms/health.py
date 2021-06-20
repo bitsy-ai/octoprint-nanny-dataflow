@@ -51,6 +51,7 @@ class ParseMonitoringImage(beam.DoFn):
     def process(self, element: bytes) -> Iterable[MonitoringImage]:
         parsed = MonitoringImage()
         parsed.ParseFromString(element)
+        logger.info(f"Received monitoring image with ts={parsed.metadata.ts}")
         yield parsed
 
 
@@ -131,9 +132,6 @@ class FilterBoxAnnotations(beam.DoFn):
         self, keyed_elements: Tuple[str, Iterable[AnnotatedMonitoringImage]]
     ) -> Iterable[AnnotatedMonitoringImage]:
         key, elements = keyed_elements
-        # if len(elements) == 0:
-        #     import pdb; pdb.set_trace()
-        #     return
         element = elements[0]  # type: ignore
         calibration = self.load_calibration(
             element.monitoring_image.metadata.octoprint_device_id

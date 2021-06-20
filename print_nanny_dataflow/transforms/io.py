@@ -77,12 +77,15 @@ class WriteWindowedTFRecord(TypedPathMixin, beam.DoFn):
             str, Iterable[AnnotatedMonitoringImage]
         ] = beam.DoFn.ElementParam,
         window=beam.DoFn.WindowParam,
+        pane_info=beam.DoFn.PaneInfoParam,
     ) -> Iterable[Iterable[str]]:
 
         key, elements = keyed_elements
-        # if len(elements) == 0:
-        #     import pdb; pdb.set_trace()
-        #     return
+        if len(elements) == 0:
+            import pdb
+
+            pdb.set_trace()
+            return
         element = elements[0]  # type: ignore
 
         window_start = int(window.start)

@@ -138,9 +138,12 @@ class WriteAnnotatedImage(TypedPathMixin, beam.DoFn):
         img = self.annotate_image(element)
         # gcs_client = beam.io.gcp.gcsio.GcsIO()
 
-        fs = beam.io.gcp.gcsfilesystem.GCSFileSystem(self.pipeline_options)
-        with fs.create(outpath) as f:
-            # with gcs_client.open(outpath, "wb") as f:
-            f.write(img)
-
+        # fs = beam.io.gcp.gcsfilesystem.GCSFileSystem(self.pipeline_options)
+        # with fs.create(outpath) as f:
+        # with gcs_client.open(outpath, "wb") as f:
+        # f.write(img)
+        logger.info(f"Writing {outpath} to gcs")
+        writer = beam.io.filesystems.FileSystems.create(outpath)
+        writer.write(img)
+        writer.close()
         yield key, outpath

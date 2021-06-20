@@ -49,7 +49,6 @@ direct:
 	$(PYTHON) -m $(PIPELINE) \
 	--runner DirectRunner \
 	--loglevel INFO \
-	--direct_num_workers=12 \
 	--runtime_type_check \
 	--bucket=$(BUCKET) \
 	--job_name=$(JOB_NAME)

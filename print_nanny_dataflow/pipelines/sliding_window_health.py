@@ -47,7 +47,7 @@ def add_timestamp(element: MonitoringImage):
 
 class MaybeEncodeVideoRenderRequest(TypedPathMixin, beam.DoFn):
     def process(self, keyed_elements, pane_info=beam.DoFn.PaneInfoParam):
-        # logger.info(f"OnWindowTrigger{pane_info}")
+        logger.info(f"OnWindowTrigger{pane_info}")
         if pane_info.is_last:
             key, elements = keyed_elements
             yield elements | beam.ParDo(EncodeVideoRenderRequest())
@@ -177,14 +177,45 @@ if __name__ == "__main__":
         ).with_output_types(Tuple[str, AnnotatedMonitoringImage])
     )
 
-    # fixed_window_view_by_key = (
-    #     parsed_dataset_by_session
-    #     | f"Add fixed window"
-    #     >> beam.WindowInto(
-    #         beam.transforms.window.FixedWindows(args.health_window_period)
-    #     )
-    #     | "Group FixedWindow by key" >> beam.GroupByKey()
-    # )
+    fixed_window_view_by_key = (
+        parsed_dataset_by_session
+        | f"Add fixed window"
+        >> beam.WindowInto(
+            beam.transforms.window.FixedWindows(args.health_window_period)
+        )
+        | "Group FixedWindow by key" >> beam.GroupByKey()
+    )
+
+    metrics = fixed_window_view_by_key | beam.ParDo(
+        SessionCountTimeElapsed(job_name="sliding-window-health")
+    )
+
+    annotated_images = (
+        fixed_window_view_by_key
+        | beam.ParDo(
+            FilterBoxAnnotations(
+                calibration_base_path,
+            )
+        )
+        | "Write annotated jpgs"
+        >> beam.ParDo(
+            WriteAnnotatedImage(
+                base_path=args.base_gcs_path,
+                bucket=args.bucket,
+                pipeline_options=pipeline_options,
+                score_threshold=args.min_score_threshold,
+                max_boxes_to_draw=args.max_boxes_to_draw,
+            )
+        )
+    )
+
+    tfrecord_sink = fixed_window_view_by_key | beam.ParDo(
+        WriteWindowedTFRecord(
+            base_path=args.base_gcs_path,
+            bucket=args.bucket,
+            module=f"{AnnotatedMonitoringImage.__module__}.{AnnotatedMonitoringImage.__name__}",
+        )
+    )
 
     # fixed_window_view_by_key | beam.Map(
     #     lambda key: print(f"Processed {len(key[1])} for session {key[0]}")
@@ -228,19 +259,19 @@ if __name__ == "__main__":
 
     # render video after session is finished
     session_gap = args.health_window_period
-    trigger_fn = beam.transforms.trigger.Repeatedly(
-        beam.transforms.trigger.AfterAny(
-            beam.transforms.trigger.AfterCount(args.buffer_limit),
-            beam.transforms.trigger.AfterProcessingTime(args.health_window_period),
-            beam.transforms.trigger.AfterWatermark(),
-        )
-    )
+    # trigger_fn = beam.transforms.trigger.Repeatedly(
+    #     beam.transforms.trigger.AfterAny(
+    #         beam.transforms.trigger.AfterCount(args.buffer_limit),
+    #         beam.transforms.trigger.AfterProcessingTime(args.health_window_period),
+    #         beam.transforms.trigger.AfterWatermark(),
+    #     )
+    # )
     sessions_grouped_by_key = (
         parsed_dataset_by_session
         | beam.WindowInto(
             beam.transforms.window.Sessions(session_gap),
             # TODO re-enable with MonitorHealthStateful
-            trigger=trigger_fn,
+            # trigger=trigger_fn,
             accumulation_mode=beam.transforms.trigger.AccumulationMode.DISCARDING,
         )
         | beam.GroupByKey()
@@ -258,37 +289,10 @@ if __name__ == "__main__":
         # >> beam.ParDo(MonitorHealthStateful(output_topic_path))
     )
 
-    metrics = sessions_grouped_by_key | beam.ParDo(
-        SessionCountTimeElapsed(job_name="sliding-window-health")
-    )
     render_video_request = sessions_grouped_by_key | beam.ParDo(
         MaybeEncodeVideoRenderRequest()
     )
-    annotated_images = (
-        sessions_grouped_by_key
-        | beam.ParDo(
-            FilterBoxAnnotations(
-                calibration_base_path,
-            )
-        )
-        | "Write annotated jpgs"
-        >> beam.ParDo(
-            WriteAnnotatedImage(
-                base_path=args.base_gcs_path,
-                bucket=args.bucket,
-                pipeline_options=pipeline_options,
-                score_threshold=args.min_score_threshold,
-                max_boxes_to_draw=args.max_boxes_to_draw,
-            )
-        )
-    )
-    tfrecord_sink = sessions_grouped_by_key | beam.ParDo(
-        WriteWindowedTFRecord(
-            base_path=args.base_gcs_path,
-            bucket=args.bucket,
-            module=f"{AnnotatedMonitoringImage.__module__}.{AnnotatedMonitoringImage.__name__}",
-        )
-    )
+
     # explode nested arrays for analysis & indexing with hive
     # _ = fixed_window_view_by_key | "Write FixedWindow Parquet" >> beam.ParDo(
     #     WriteWindowedParquet(
