@@ -19,7 +19,9 @@ def test_path_no_window():
         ext=ext,
         filename=filename,
     )
-    expected = f"gs://{bucket}/{base_path}/{module}/{datesegment}/{key}/{ext}/{filename}"
+    expected = (
+        f"gs://{bucket}/{base_path}/{module}/{datesegment}/{key}/{ext}/{filename}"
+    )
     assert actual == expected
 
 
@@ -42,5 +44,7 @@ def test_path_nondefaults():
         filename=filename,
         protocol=protocol,
     )
-    expected = f"{protocol}{bucket}/{base_path}/{module}/{datesegment}/{key}/{ext}/{filename}"
+    expected = (
+        f"{protocol}{bucket}/{base_path}/{module}/{datesegment}/{key}/{ext}/{filename}"
+    )
     assert actual == expected

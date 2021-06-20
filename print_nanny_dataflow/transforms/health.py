@@ -131,10 +131,13 @@ class FilterBoxAnnotations(beam.DoFn):
         self, keyed_elements: Tuple[str, Iterable[AnnotatedMonitoringImage]]
     ) -> Iterable[AnnotatedMonitoringImage]:
         key, elements = keyed_elements
-        element = elements[0]
+        # if len(elements) == 0:
+        #     import pdb; pdb.set_trace()
+        #     return
+        element = elements[0]  # type: ignore
         calibration = self.load_calibration(
             element.monitoring_image.metadata.octoprint_device_id
         )
-        yield elements | beam.Map(
+        return elements | beam.Map(
             lambda x: merge_filtered_annotations(x, calibration=calibration)
         )

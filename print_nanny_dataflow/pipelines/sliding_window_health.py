@@ -276,6 +276,7 @@ if __name__ == "__main__":
             WriteAnnotatedImage(
                 base_path=args.base_gcs_path,
                 bucket=args.bucket,
+                pipeline_options=pipeline_options,
                 score_threshold=args.min_score_threshold,
                 max_boxes_to_draw=args.max_boxes_to_draw,
             )

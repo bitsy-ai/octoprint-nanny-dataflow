@@ -74,12 +74,15 @@ class WriteWindowedTFRecord(TypedPathMixin, beam.DoFn):
     def process(
         self,
         keyed_elements: Tuple[
-            Any, Iterable[AnnotatedMonitoringImage]
+            str, Iterable[AnnotatedMonitoringImage]
         ] = beam.DoFn.ElementParam,
         window=beam.DoFn.WindowParam,
     ) -> Iterable[Iterable[str]]:
 
         key, elements = keyed_elements
+        # if len(elements) == 0:
+        #     import pdb; pdb.set_trace()
+        #     return
         element = elements[0]  # type: ignore
 
         window_start = int(window.start)

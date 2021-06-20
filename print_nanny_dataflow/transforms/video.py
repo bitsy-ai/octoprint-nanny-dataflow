@@ -6,6 +6,7 @@ import apache_beam as beam
 from print_nanny_dataflow.utils.visualization import (
     visualize_boxes_and_labels_on_image_array,
 )
+from apache_beam.options.pipeline_options import PipelineOptions
 from print_nanny_dataflow.coders.types import (
     CATEGORY_INDEX,
 )
@@ -50,6 +51,7 @@ class WriteAnnotatedImage(TypedPathMixin, beam.DoFn):
         self,
         base_path: str,
         bucket: str,
+        pipeline_options: PipelineOptions,
         category_index=CATEGORY_INDEX,
         score_threshold=0.5,
         max_boxes_to_draw=10,
@@ -58,6 +60,7 @@ class WriteAnnotatedImage(TypedPathMixin, beam.DoFn):
             f"{AnnotatedMonitoringImage.__module__}.{AnnotatedMonitoringImage.__name__}"
         ),
     ):
+        self.pipeline_options = pipeline_options
         self.category_index = category_index
         self.score_threshold = score_threshold
         self.max_boxes_to_draw = max_boxes_to_draw
@@ -133,9 +136,11 @@ class WriteAnnotatedImage(TypedPathMixin, beam.DoFn):
             module=self.module,
         )
         img = self.annotate_image(element)
-        gcs_client = beam.io.gcp.gcsio.GcsIO()
+        # gcs_client = beam.io.gcp.gcsio.GcsIO()
 
-        with gcs_client.open(outpath, "wb") as f:
+        fs = beam.io.gcp.gcsfilesystem.GCSFileSystem(self.pipeline_options)
+        with fs.create(outpath) as f:
+            # with gcs_client.open(outpath, "wb") as f:
             f.write(img)
 
         yield key, outpath
