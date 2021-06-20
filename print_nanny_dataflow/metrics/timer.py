@@ -26,6 +26,20 @@ class MeasureTimeDecorator(object):
         self.time_distribution = Metrics.distribution(namespace, name)
 
 
+class SessionCountTimeElapsed(DoFn):
+    def __init__(self, job_name: str):
+        self.job_name = job_name
+        self.session_count = Metrics.counter(job_name, "session_count")
+        self.seconds_elapsed_count = Metrics.counter(job_name, "seconds_elapsed")
+
+    def process(self, _, window=DoFn.WindowParam, pane_info=DoFn.PaneInfoParam):
+        self.seconds_elapsed_count.inc(float(window.end - window.start))
+        if pane_info.is_first:
+            self.session_count.inc()
+        if pane_info.is_last:
+            self.session_count.dec()
+
+
 class FixedWindowMetricStart(DoFn):
     def __init__(self, window_period: int, job_name: str):
         self.window_period = window_period

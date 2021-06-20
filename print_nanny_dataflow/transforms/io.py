@@ -30,7 +30,6 @@ class TypedPathMixin:
         datesegment: str,
         module: str,
         ext: str,
-        window_type: str,
         filename: str = "",
         protocol: str = "gs://",
     ) -> str:
@@ -50,7 +49,6 @@ class TypedPathMixin:
             bucket,
             base_path,
             module,
-            # window_type,
             datesegment,
             key,
             ext,
@@ -66,14 +64,12 @@ class WriteWindowedTFRecord(TypedPathMixin, beam.DoFn):
         base_path: str,
         bucket: str,
         module,
-        window_type: str,
         ext: str = "tfrecord",
     ):
         self.base_path = base_path
         self.bucket = bucket
         self.module = module
         self.ext = ext
-        self.window_type = window_type
 
     def process(
         self,
@@ -98,7 +94,6 @@ class WriteWindowedTFRecord(TypedPathMixin, beam.DoFn):
             ext=self.ext,
             filename=filename,
             module=self.module,
-            window_type=self.window_type,
         )
 
         coder = beam.coders.coders.ProtoCoder(element.__class__)

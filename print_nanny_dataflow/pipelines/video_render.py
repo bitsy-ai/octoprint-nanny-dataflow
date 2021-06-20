@@ -40,7 +40,6 @@ class RenderVideo(TypedPathMixin, beam.DoFn):
             key=key,
             module=module,
             ext="jpg",
-            window_type="FixedWindows",
             datesegment=datesegment,
         )
         output_path = self.path(
@@ -50,7 +49,6 @@ class RenderVideo(TypedPathMixin, beam.DoFn):
             module=module,
             ext="mp4",
             filename=filename,
-            window_type="FixedWindows",
             datesegment=datesegment,
         )
         cdn_output_path = os.path.join(

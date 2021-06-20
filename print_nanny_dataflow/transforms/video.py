@@ -53,7 +53,6 @@ class WriteAnnotatedImage(TypedPathMixin, beam.DoFn):
         category_index=CATEGORY_INDEX,
         score_threshold=0.5,
         max_boxes_to_draw=10,
-        window_type="fixed",
         ext="jpg",
         module=(
             f"{AnnotatedMonitoringImage.__module__}.{AnnotatedMonitoringImage.__name__}"
@@ -65,7 +64,6 @@ class WriteAnnotatedImage(TypedPathMixin, beam.DoFn):
         self.base_path = base_path
         self.bucket = bucket
         self.ext = ext
-        self.window_type = window_type
         self.module = module
 
     def annotate_image(self, el: AnnotatedMonitoringImage) -> bytes:
@@ -133,13 +131,11 @@ class WriteAnnotatedImage(TypedPathMixin, beam.DoFn):
             ext=self.ext,
             filename=filename,
             module=self.module,
-            window_type=self.window_type,
         )
         img = self.annotate_image(element)
         gcs_client = beam.io.gcp.gcsio.GcsIO()
 
         with gcs_client.open(outpath, "wb") as f:
-            logger.debug(f"Writing to {outpath}")
             f.write(img)
 
         yield key, outpath

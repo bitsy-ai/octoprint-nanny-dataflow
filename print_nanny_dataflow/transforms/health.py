@@ -101,7 +101,7 @@ class PredictBoundingBoxes(beam.DoFn):
         yield self.process_timed(element)
 
 
-@beam.typehints.with_input_types(AnnotatedMonitoringImage)
+@beam.typehints.with_input_types(Tuple[str, Iterable[AnnotatedMonitoringImage]])
 @beam.typehints.with_output_types(AnnotatedMonitoringImage)
 class FilterBoxAnnotations(beam.DoFn):
     def __init__(
@@ -112,11 +112,8 @@ class FilterBoxAnnotations(beam.DoFn):
         self.calibration_base_path = calibration_base_path
         self.calibration_filename = calibration_filename
 
-    def load_calibration(
-        self, element: AnnotatedMonitoringImage
-    ) -> Optional[DeviceCalibration]:
+    def load_calibration(self, device_id: int) -> Optional[DeviceCalibration]:
         gcs_client = beam.io.gcp.gcsio.GcsIO()
-        device_id = element.monitoring_image.metadata.octoprint_device_id
         device_calibration_path = os.path.join(
             self.calibration_base_path, str(device_id), self.calibration_filename
         )
@@ -131,8 +128,13 @@ class FilterBoxAnnotations(beam.DoFn):
         return None
 
     def process(
-        self,
-        element=AnnotatedMonitoringImage,
+        self, keyed_elements: Tuple[str, Iterable[AnnotatedMonitoringImage]]
     ) -> Iterable[AnnotatedMonitoringImage]:
-        calibration = self.load_calibration(element)
-        yield merge_filtered_annotations(element, calibration=calibration)
+        key, elements = keyed_elements
+        element = elements[0]
+        calibration = self.load_calibration(
+            element.monitoring_image.metadata.octoprint_device_id
+        )
+        yield elements | beam.Map(
+            lambda x: merge_filtered_annotations(x, calibration=calibration)
+        )
