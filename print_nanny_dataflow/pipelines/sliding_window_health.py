@@ -14,11 +14,13 @@ import tarfile
 import apache_beam as beam
 from typing import List, Tuple, Any, Iterable, Generator, Coroutine, Optional, Union
 from apache_beam.options.pipeline_options import PipelineOptions
+from apache_beam.metrics import Metrics
 
 from print_nanny_dataflow.transforms.io import (
     WriteWindowedTFRecord,
     WriteWindowedParquet,
 )
+from print_nanny_dataflow.transforms.video import EncodeVideoRenderRequest
 from print_nanny_dataflow.transforms.health import (
     ParseMonitoringImage,
     PredictBoundingBoxes,
@@ -30,9 +32,9 @@ from print_nanny_client.protobuf.monitoring_pb2 import (
     AnnotatedMonitoringImage,
 )
 
+from print_nanny_dataflow.transforms.io import TypedPathMixin
 from print_nanny_dataflow.transforms.video import WriteAnnotatedImage
-from print_nanny_dataflow.metrics import FixedWindowMetricStart, FixedWindowMetricEnd
-
+from print_nanny_client.protobuf.alert_pb2 import VideoRenderRequest
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +56,18 @@ if __name__ == "__main__":
     parser.add_argument(
         "--subscription",
         default="sliding-window-health",
+        help="PubSub subscription",
+    )
+
+    parser.add_argument(
+        "--input-topic",
+        default="MonitoringImage",
+        help="PubSub subscription",
+    )
+
+    parser.add_argument(
+        "--output-topic",
+        default="VideoRenderRequest",
         help="PubSub subscription",
     )
 
@@ -93,6 +107,12 @@ if __name__ == "__main__":
         help="Max number of bounding boxes output by nms operation",
     )
 
+    parser.add_argument(
+        "--buffer-limit",
+        default=20,
+        help="Max number of bounding boxes output by nms operation",
+    )
+
     parser.add_argument("--min-score-threshold", default=0.66)
 
     parser.add_argument("--max-boxes-to-draw", default=5)
@@ -115,10 +135,22 @@ if __name__ == "__main__":
         project=args.project,
     )
 
-    input_subscription_path = os.path.join(
-        "projects", args.project, "subscriptions", args.subscription
-    )
+    # use named subscription in dataflow runner
+    if args.runner == "DataflowRunner":
+        input_kwargs = dict(
+            subscription=os.path.join(
+                "projects", args.project, "subscriptions", args.subscription
+            )
+        )
+    # otherwise create a new subscription for topic
+    else:
+        input_kwargs = dict(
+            topic=os.path.join("projects", args.project, "topics", args.input_topic)
+        )
 
+    output_topic_path = os.path.join(
+        "projects", args.project, "topics", args.output_topic
+    )
     model_path = os.path.join("gs://", args.bucket, args.model_path, "model.tflite")
 
     p = beam.Pipeline(options=pipeline_options)
@@ -127,8 +159,7 @@ if __name__ == "__main__":
 
     parsed_dataset_by_session = (
         p
-        | "Read TelemetryEvent"
-        >> beam.io.ReadFromPubSub(subscription=input_subscription_path)
+        | "Read TelemetryEvent" >> beam.io.ReadFromPubSub(**input_kwargs)
         | "Deserialize Protobuf" >> beam.ParDo(ParseMonitoringImage())
         | beam.Map(add_timestamp)
         | "Add Bounding Box Annotations" >> beam.ParDo(PredictBoundingBoxes(model_path))
@@ -147,20 +178,9 @@ if __name__ == "__main__":
         | "Group FixedWindow by key" >> beam.GroupByKey()
     )
 
-    fixed_window_view_by_key | beam.Map(
-        lambda key: print(f"Processed {len(key[1])} for session {key[0]}")
-    )
-
-    _ = (
+    annotated_images = (
         fixed_window_view_by_key
-        | "Calculate metrics over fixed window intervals"
-        >> beam.ParDo(FixedWindowMetricStart(args.health_window_period, "print_health"))
-    )
-
-    _ = (
-        fixed_window_view_by_key
-        | "Filter area of interest and detections above threshold"
-        >> beam.ParDo(
+        | beam.ParDo(
             FilterBoxAnnotations(
                 calibration_base_path,
             )
@@ -170,77 +190,37 @@ if __name__ == "__main__":
             WriteAnnotatedImage(
                 base_path=args.base_gcs_path,
                 bucket=args.bucket,
+                pipeline_options=pipeline_options,
                 score_threshold=args.min_score_threshold,
                 max_boxes_to_draw=args.max_boxes_to_draw,
-                window_type=beam.transforms.window.FixedWindows.__name__,
             )
         )
     )
 
-    # packed tfrecords for training dataset
-    _ = fixed_window_view_by_key | "Write FixedWindow TFRecords" >> beam.ParDo(
+    tfrecord_sink = fixed_window_view_by_key | beam.ParDo(
         WriteWindowedTFRecord(
             base_path=args.base_gcs_path,
             bucket=args.bucket,
             module=f"{AnnotatedMonitoringImage.__module__}.{AnnotatedMonitoringImage.__name__}",
-            window_type=beam.transforms.window.FixedWindows.__name__,
         )
     )
 
-    # explode nested arrays for analysis & indexing with hive
-    # _ = fixed_window_view_by_key | "Write FixedWindow Parquet" >> beam.ParDo(
-    #     WriteWindowedParquet(
-    #         args.base_gcs_path,
-    #         bucket=args.bucket,
-    #         module=f"{AnnotatedMonitoringImage.__module__}.{AnnotatedMonitoringImage.__name__}"
-    #     )
-    # )
+    # render video after session is finished
+    session_gap = args.health_window_period
+    sessions_latest_by_key = (
+        parsed_dataset_by_session
+        | beam.WindowInto(
+            beam.transforms.window.Sessions(session_gap),
+            # trigger=trigger_fn,
+        )
+        | beam.combiners.Latest.PerKey()
+    )
 
-    # sliding_window_view = parsed_dataset | "Add sliding window" >> beam.WindowInto(
-    #     beam.transforms.window.SlidingWindows(
-    #         args.health_window_size, args.health_window_period
-    #     ),
-    #     accumulation_mode=beam.transforms.trigger.AccumulationMode.ACCUMULATING,
-    # )
-
-    # _ = (
-    #     sliding_window_view
-    #     | "Write SlidingWindow ExplodeWindowedHealthRecord Parquet (unfilterd)"
-    #     >> beam.ParDo(ExplodeWindowedHealthRecord())
-    #     | "Group unfiltered health records by key" >> beam.GroupBy("print_session")
-    #     | "Write SlidingWindow Parquet"
-    #     >> beam.ParDo(
-    #         WriteWindowedParquet(
-    #             args.base_gcs_path,
-    #             WindowedHealthRecord.pyarrow_schema(),
-    #             record_type="WindowedHealthRecord/parquet",
-    #         )
-    #     )
-    # )
-
-    # filtered_health_dataframe = (
-    #     sliding_window_view
-    #     | "Drop image data" >> beam.Map(lambda v: v.drop_image_data())
-    #     | "Group alert pipeline by session" >> beam.GroupBy("print_session")
-    #     | "Filter detections below threshold & outside area of interest"
-    #     >> beam.ParDo(FilterAreaOfInterest(calibration_base_path))
-    #     | beam.ParDo(ExplodeWindowedHealthRecord())
-    #     | "Windowed health DataFrame" >> beam.GroupBy("print_session")
-    #     | beam.ParDo(SortWindowedHealthDataframe())
-    #     | beam.GroupByKey()
-    # )
-
-    # _ = (
-    #     filtered_health_dataframe
-    #     | "Write SlidingWindow (calibration & threshold filtered) Parquet"
-    #     >> beam.ParDo(
-    #         WriteWindowedParquet(
-    #             args.base_gcs_path,
-    #             NestedWindowedHealthTrend.pyarrow_schema(),
-    #             record_type="NestedWindowedHealthTrend/parquet",
-    #         )
-    #     )
-    # )
+    render_video_request = (
+        sessions_latest_by_key
+        | beam.ParDo(EncodeVideoRenderRequest())
+        | beam.io.WriteToPubSub(output_topic_path)
+    )
 
     result = p.run()
     if args.runner == "DirectRunner":

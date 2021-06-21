@@ -51,7 +51,7 @@ def test_filter_all_detections_by_aoi_0():
 
     num_detections = 10
     threshold = 0.5
-    calibration = DeviceCalibration(coordinates=(0.3, 0.3, 0.4, 0.4), fps=1.0)
+    calibration = DeviceCalibration(box=Box(xy=(0.3, 0.3, 0.4, 0.4)), fps=1.0)
     detection_boxes = np.array([[0.2, 0.2, 0.3, 0.3] for _ in range(0, num_detections)])
     detection_scores = np.linspace(0, threshold, num_detections)
     detection_classes = np.ones(num_detections, dtype=np.int32)
@@ -78,7 +78,7 @@ def test_filter_all_detections_by_aoi_1():
 
     num_detections = 10
     threshold = 0.5
-    calibration = DeviceCalibration(coordinates=(0.1, 0.1, 0.9, 0.9), fps=1.0)
+    calibration = DeviceCalibration(box=Box(xy=(0.1, 0.1, 0.9, 0.9)), fps=1.0)
     detection_boxes = np.array([[0.2, 0.2, 0.3, 0.3] for _ in range(0, num_detections)])
     detection_scores = np.linspace(threshold + 0.1, 1, num_detections)
     detection_classes = np.ones(num_detections, dtype=np.int32)

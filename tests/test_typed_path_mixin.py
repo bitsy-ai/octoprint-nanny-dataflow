@@ -9,7 +9,6 @@ def test_path_no_window():
     module = "module_pb.StructName"
     ext = "jpg"
     filename = f"1234_1239.{ext}"
-    window_type = "fixed"
 
     actual = TypedPathMixin().path(
         bucket=bucket,
@@ -19,9 +18,10 @@ def test_path_no_window():
         module=module,
         ext=ext,
         filename=filename,
-        window_type=window_type,
     )
-    expected = f"gs://{bucket}/{base_path}/{module}/{window_type}/{datesegment}/{key}/{ext}/{filename}"
+    expected = (
+        f"gs://{bucket}/{base_path}/{module}/{datesegment}/{key}/{ext}/{filename}"
+    )
     assert actual == expected
 
 
@@ -33,7 +33,6 @@ def test_path_nondefaults():
     module = "module_pb.StructName"
     ext = "jpg"
     protocol = "s3://"
-    window_type = "fixed"
     filename = f"1234_1239.{ext}"
     actual = TypedPathMixin().path(
         bucket=bucket,
@@ -44,7 +43,8 @@ def test_path_nondefaults():
         ext=ext,
         filename=filename,
         protocol=protocol,
-        window_type=window_type,
     )
-    expected = f"{protocol}{bucket}/{base_path}/{module}/{window_type}/{datesegment}/{key}/{ext}/{filename}"
+    expected = (
+        f"{protocol}{bucket}/{base_path}/{module}/{datesegment}/{key}/{ext}/{filename}"
+    )
     assert actual == expected
