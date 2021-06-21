@@ -1,20 +1,16 @@
-name: Deploy to Production
+name: Clean Sandbox Deploy
 
 # Controls when the action will run. 
 on:
-  # Triggers the workflow on push or pull request events but only for the main branch
-  push:
-    branches: [ stable ]
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
 env:
-  GCP_SERVICE_ACCOUNT_KEY: ${{ secrets.PROD_SERVICE_ACCOUNT_JSON }}
-  GCP_SERVICE_ACCOUNT:  ${{ secrets.PROD_SERVICE_ACCOUNT }}
-  GCP_PROJECT: print-nanny
+  GCP_SERVICE_ACCOUNT_KEY: ${{ secrets.SANDBOX_SERVICE_ACCOUNT_JSON }}
+  GCP_SERVICE_ACCOUNT:  ${{ secrets.SANDBOX_SERVICE_ACCOUNT }}
+  GCP_PROJECT: print-nanny-sandbox
   DISCORD_WEBCOOK: ${{ secrets.PRINT_NANNY_DISCORD_DEPLOY_WEBHOOK }}
   GOOGLE_APPLICATION_CREDENTIALS: key.json
-
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
   # This workflow contains a single job called "build"
@@ -50,8 +46,8 @@ jobs:
       - name: Deploy Video Render Pipeline
         run: |
           source .venv/bin/activate
-          make dataflow PROJECT=print-nanny PIPELINE=print_nanny_dataflow.pipelines.video_render JOB_NAME=video-render BUCKET=print-nanny-prod
+          make dataflow-clean PROJECT=print-nanny-sandbox PIPELINE=print_nanny_dataflow.pipelines.video_render JOB_NAME=video-render
       - name: Deploy Sliding Health Pipeline
         run: |
           source .venv/bin/activate
-          make dataflow PROJECT=print-nanny PIPELINE=print_nanny_dataflow.pipelines.sliding_window_health JOB_NAME=sliding-window-health BUCKET=print-nanny-prod
+          make dataflow-clean PROJECT=print-nanny-sandbox PIPELINE=print_nanny_dataflow.pipelines.sliding_window_health JOB_NAME=sliding-window-health

@@ -1,5 +1,5 @@
 from tensorflow_transform.coders import example_proto_coder
-
+import tensorflow as tf
 from .types import NestedTelemetryEvent
 
 

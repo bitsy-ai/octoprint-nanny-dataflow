@@ -1,30 +1,27 @@
 from __future__ import annotations
-import json
 from enum import Enum
-from typing import Tuple, Dict, Any, NamedTuple, TypeVar, Generic
+from typing import Tuple, Dict, Any, NamedTuple, TypeVar, Generic, Optional, NewType
 import pandas as pd
 import numpy as np
 import nptyping as npt
 import tensorflow as tf
-import os
-import flatbuffers
 from tensorflow_transform.tf_metadata import schema_utils
 from tensorflow_transform.tf_metadata import dataset_metadata
 from tensorflow_metadata.proto.v0 import schema_pb2
 
-from apache_beam.pvalue import PCollection
 import pyarrow as pa
 
-import print_nanny_client
-from print_nanny_client.flatbuffers.alert import (
-    Alert,
-    AnnotatedVideo,
+from print_nanny_client.protobuf.monitoring_pb2 import (
+    MonitoringImage,
+    AnnotatedMonitoringImage,
+    BoxAnnotations,
+    DeviceCalibration,
+    Box,
 )
 from print_nanny_client.flatbuffers.alert.AlertEventTypeEnum import AlertEventTypeEnum
 from print_nanny_client.flatbuffers.alert import Metadata as MetadataFB
 from print_nanny_client.flatbuffers.monitoring import MonitoringEvent
 
-from dataclasses import dataclass, asdict
 
 CATEGORY_INDEX = {
     0: {"name": "background", "id": 0, "health_weight": 0},
@@ -34,6 +31,10 @@ CATEGORY_INDEX = {
     4: {"name": "print", "id": 4, "health_weight": 1},
     5: {"name": "raftt", "id": 5, "health_weight": 1},
 }
+
+
+def get_health_weight(label: int) -> float:
+    return CATEGORY_INDEX[label].get("health_weight")  # type: ignore
 
 
 class WindowType(Enum):
@@ -48,8 +49,8 @@ class Metadata(NamedTuple):
     user_id: int
     octoprint_device_id: int
     cloudiot_device_id: int
-    window_start: int = None
-    window_end: int = None
+    window_start: Optional[int] = None
+    window_end: Optional[int] = None
 
     def to_dict(self):
         return self._asdict()
@@ -64,102 +65,6 @@ class Metadata(NamedTuple):
             ("cloudiot_device_id", pa.int64()),
             ("window_start", pa.int64()),
             ("window_end", pa.int64()),
-        ]
-
-    @classmethod
-    def pyarrow_struct(cls):
-        return pa.struct(cls.pyarrow_fields())
-
-    @classmethod
-    def pyarrow_schema(cls):
-        return pa.schema(cls.pyarrow_fields())
-
-
-class RenderVideoMessage(NamedTuple):
-    metadata: Metadata
-    print_session: str
-    event_type: AlertEventTypeEnum.video_done
-    gcs_input: str
-    gcs_output: str
-    cdn_output: str
-    cdn_relative: str
-    bucket: str
-
-    def full_cdn_path(self):
-        return os.path.join("gs://", self.bucket, self.cdn_output)
-
-    def to_dict(self) -> Dict[str, Any]:
-        return self._asdict()
-
-    def to_bytes(self):
-        metadata = self.metadata.to_dict()
-        return (
-            pa.serialize(
-                dict(
-                    metadata=metadata,
-                    print_session=self.print_session,
-                    event_type=self.event_type,
-                    gcs_input=self.gcs_input,
-                    gcs_output=self.gcs_output,
-                    cdn_output=self.cdn_output,
-                    cdn_relative=self.cdn_relative,
-                    bucket=self.bucket,
-                )
-            )
-            .to_buffer()
-            .to_pybytes()
-        )
-
-    def to_flatbuffer(self) -> bytearray:
-        builder = flatbuffers.Builder(1024)
-        client_version = builder.CreateString(self.metadata.client_version)
-        print_session = builder.CreateString(self.metadata.print_session)
-
-        MetadataFB.MetadataStart(builder)
-        MetadataFB.MetadataAddUserId(builder, self.metadata.user_id)
-        MetadataFB.MetadataAddCloudiotDeviceId(
-            builder, self.metadata.cloudiot_device_id
-        )
-        MetadataFB.MetadataAddOctoprintDeviceId(
-            builder, self.metadata.octoprint_device_id
-        )
-        MetadataFB.MetadataAddClientVersion(builder, client_version)
-        MetadataFB.MetadataAddPrintSession(builder, print_session)
-        metadata = MetadataFB.MetadataEnd(builder)
-
-        gcs_input = builder.CreateString(self.gcs_input)
-        gcs_output = builder.CreateString(self.gcs_output)
-        cdn_output = builder.CreateString(self.cdn_output)
-        cdn_relative = builder.CreateString(self.cdn_relative)
-
-        AnnotatedVideo.AnnotatedVideoStart(builder)
-        AnnotatedVideo.AnnotatedVideoAddGcsInput(builder, gcs_input)
-        AnnotatedVideo.AnnotatedVideoAddGcsOutput(builder, gcs_output)
-        AnnotatedVideo.AnnotatedVideoAddCdnOutput(builder, cdn_output)
-        AnnotatedVideo.AnnotatedVideoAddCdnRelativePath(builder, cdn_relative)
-        annotated_video = AnnotatedVideo.AnnotatedVideoEnd(builder)
-
-        Alert.AlertStart(builder)
-        Alert.AlertAddEventType(builder, self.event_type)
-        Alert.AlertAddMetadata(builder, metadata)
-        Alert.AlertAddAnnotatedVideo(builder, annotated_video)
-        alert = Alert.AlertEnd(builder)
-        builder.Finish(alert)
-        return builder.Output()
-
-    @classmethod
-    def from_bytes(cls, pyarrow_bytes):
-        data = pa.deserialize(pyarrow_bytes)
-        data["metadata"] = Metadata(**data["metadata"])
-        return cls(**data)
-
-    @staticmethod
-    def pyarrow_fields():
-        return [
-            ("print_session", pa.string()),
-            ("metadata", Metadata.pyarrow_struct()),
-            ("event_type", pa.int32()),
-            ("filepattern", pa.string()),
         ]
 
     @classmethod
@@ -208,7 +113,7 @@ class WindowedHealthDataFrameRow(NamedTuple):
     detection_class: npt.Int32
     detection_score: npt.Float32
 
-    def to_dict():
+    def to_dict(self):
         return self._asdict()
 
     @staticmethod
@@ -331,55 +236,6 @@ class WindowedHealthRecord(NamedTuple):
         return pa.schema(cls.pyarrow_fields())
 
 
-class DeviceCalibration(NamedTuple):
-    coordinates: npt.NDArray[npt.Float32]
-    mask = npt.NDArray[npt.Bool]
-    fpm = int
-
-    def filter_event(
-        self, event: "NestedTelemetryEvent", min_overlap_area: float = 0.75
-    ):
-        percent_intersection = self.percent_intersection(self.coordinates)
-        ignored_mask = percent_intersection <= min_overlap_area
-
-        detection_boxes = self.detection_boxes()
-        included_mask = np.invert(ignored_mask)
-        detection_boxes = np.squeeze(detection_boxes[included_mask])
-        detection_scores = np.squeeze(self.detection_scores[included_mask])
-        detection_classes = np.squeeze(self.detection_classes[included_mask])
-
-        num_detections = int(np.count_nonzero(included_mask))
-
-        filter_fields = [
-            "detection_scores",
-            "detection_classes",
-            "boxes_ymin",
-            "boxes_xmin",
-            "boxes_ymax",
-            "boxes_xmax",
-            "num_detections",
-        ]
-        default_fieldset = {
-            k: v for k, v in self.to_dict().items() if k not in filter_fields
-        }
-        boxes_ymin, boxes_xmin, boxes_ymax, boxes_xmax = detection_boxes.T
-
-        _kwargs = self.to_dict()
-        _kwargs.update(
-            dict(
-                detection_scores=detection_scores,
-                detection_classes=detection_classes,
-                num_detections=num_detections,
-                boxes_ymin=boxes_ymin,
-                boxes_xmin=boxes_xmin,
-                boxes_ymax=boxes_ymax,
-                boxes_xmax=boxes_xmax,
-                calibration=self,
-            )
-        )
-        return NestedTelemetryEvent.__class__(**_kwargs)
-
-
 class AnnotatedImage(NamedTuple):
     ts: int
     print_session: str
@@ -411,10 +267,9 @@ class NestedTelemetryEvent(NamedTuple):
     # Image
     image_width: npt.Float32
     image_height: npt.Float32
-    image_data: bytes = None
-    image_tensor: tf.Tensor = None
-    calibration: DeviceCalibration = None
-    annotated_image_data: bytes = None
+    image_data: Optional[bytes] = None
+    image_tensor: Optional[tf.Tensor] = None
+    annotated_image_data: Optional[bytes] = None
 
     @staticmethod
     def pyarrow_schema(num_detections):
@@ -473,22 +328,22 @@ class NestedTelemetryEvent(NamedTuple):
 
         obj = MonitoringEvent.MonitoringEvent.GetRootAsMonitoringEvent(input_bytes, 0)
 
-        scores = []
-        num_detections = []
-        classes = []
-        boxes_ymin = []
-        boxes_xmin = []
-        boxes_ymax = []
-        boxes_xmax = []
-
         if obj.BoundingBoxes() is not None:
             scores = obj.BoundingBoxes().DetectionScores()
             classes = obj.BoundingBoxes().DetectionClasses()
             num_detections = obj.BoundingBoxes().NumDetections()
             boxes_ymin, boxes_xmin, boxes_ymax, boxes_xmax = [
-                np.array([b.Ymin(), b.Xmin(), x.Ymax(), b.Xmax()])
+                np.array([b.Ymin(), b.Xmin(), b.Ymax(), b.Xmax()])
                 for b in obj.BoundingBoxes()
             ]
+        else:
+            num_detections = 0
+            classes = np.array([], dtype=np.int32)
+            scores = np.array([], dtype=np.float32)
+            boxes_ymin = np.array([], dtype=np.float32)
+            boxes_xmin = np.array([], dtype=np.float32)
+            boxes_ymax = np.array([], dtype=np.float32)
+            boxes_xmax = np.array([], dtype=np.float32)
 
         image_data = obj.Image().DataAsNumpy().tobytes()
         session = obj.Metadata().PrintSession().decode("utf-8")
@@ -522,75 +377,16 @@ class NestedTelemetryEvent(NamedTuple):
     def to_dataframe(self) -> pd.DataFrame:
         return pd.DataFrame(self.to_dict())
 
-    def flatten(self):
-        array_fields = [
-            "detection_scores",
-            "detection_classes",
-            "boxes_ymin",
-            "boxes_xmin",
-            "boxes_ymax",
-            "boxes_xmax",
-        ]
-        default_fieldset = {
-            k: v for k, v in self.to_dict().items() if k not in array_fields
-        }
-        return (
-            FlatTelemetryEvent(
-                **default_fieldset,
-                detection_class=self.detection_classes[i],
-                detection_score=self.detection_scores[i],
-                box_xmin=self.boxes_xmin[i],
-                box_ymin=self.boxes_ymin[i],
-                box_ymax=self.boxes_ymax[i],
-                box_xmax=self.boxes_xmax[i]
-            )
-            for i in range(0, self.num_detections)
-        )
-
     def drop_image_data(self):
         exclude = ["image_data", "image_tensor"]
         fieldset = self.to_dict()
         return self.__class__(**{k: v for k, v in fieldset.items() if k not in exclude})
 
-    def min_score_filter(self, score_threshold=0.5):
-        masked_fields = [
-            "detection_scores",
-            "detection_classes",
-            "boxes_ymin",
-            "boxes_xmin",
-            "boxes_ymax",
-            "boxes_xmax",
-        ]
-        ignored_fields = ["num_detections"]
-        fieldset = self.to_dict()
-        mask = self.detection_scores >= score_threshold
-
-        default_fieldset = {
-            k: v
-            for k, v in fieldset.items()
-            if k not in masked_fields and k not in ignored_fields
-        }
-        if np.count_nonzero(mask) == 0:
-            masked_fields = {
-                k: np.array([])
-                for k, v in fieldset.items()
-                if k in masked_fields and k not in ignored_fields
-            }
-        else:
-            masked_fields = {
-                k: v[mask]
-                for k, v in fieldset.items()
-                if k in masked_fields and k not in ignored_fields
-            }
-        return self.__class__(
-            **default_fieldset, **masked_fields, num_detections=np.count_nonzero(mask)
-        )
-
-    def percent_intersection(self, aoi_coords: Tuple[float]):
+    def percent_intersection(self, aoi_coords: Tuple[float, float, float, float]):
         """
         Returns intersection-over-union area, normalized between 0 and 1
         """
-        detection_boxes = self.detection_boxes()
+        detection_boxes = self.detection_boxes
 
         # initialize array of zeroes
         aou = np.zeros(len(detection_boxes))
@@ -624,6 +420,7 @@ class NestedTelemetryEvent(NamedTuple):
 
         return aou
 
+    @property
     def detection_boxes(self):
         return np.array(
             [self.boxes_ymin, self.boxes_xmin, self.boxes_ymax, self.boxes_xmax]

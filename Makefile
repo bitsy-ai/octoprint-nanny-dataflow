@@ -14,6 +14,9 @@ BUCKET ?= "print-nanny-sandbox"
 MAX_NUM_WORKERS ?= 2
 GCP_REGION ?= "us-central1"
 
+mypy:
+	mypy print_nanny_dataflow/
+
 clean-build: ## remove build artifacts
 	rm -fr build/
 	rm -fr dist/
@@ -29,18 +32,23 @@ clean-pyc: ## remove Python file artifacts
 	find . -name '*.pyo' -exec rm -f {} +
 	find . -name '*~' -exec rm -f {} +
 	find . -name '__pycache__' -exec rm -fr {} +
+	rm -rf .mypy_cache
 
 clean: clean-dist clean-pyc clean-build
 
 docker-image:
 	gcloud builds submit --tag $(IMAGE) --project $(PROJECT)
 
+pytest:
+	python -m pytest --disable-pytest-warnings
+
+pytest-coverage:
+	python -m pytest --cov=./ --cov-report=xml
+
 direct:
 	$(PYTHON) -m $(PIPELINE) \
 	--runner DirectRunner \
 	--loglevel INFO \
-	--api-url=$(PRINT_NANNY_API_URL) \
-	--api-token=$$PRINT_NANNY_API_TOKEN \
 	--direct_num_workers=12 \
 	--runtime_type_check \
 	--bucket=$(BUCKET) \
@@ -50,8 +58,6 @@ portable: docker-image
 	$(PYTHON) -m $(PIPELINE) \
 	--runner PortableRunner \
 	--loglevel INFO \
-	--api-url=$(PRINT_NANNY_API_URL) \
-	--api-token=$$PRINT_NANNY_API_TOKEN \
 	--job_endpoint=embed \
 	--environment_type=DOCKER \
 	--environment_config=$(IMAGE) \
@@ -74,11 +80,33 @@ dataflow: clean docker-image sdist
 	​--setup_file=$(PWD)/setup.py \
 	--staging_location=gs://$(BUCKET)/dataflow/staging \
 	--streaming \
-	--update \
+	--max_num_workers=$(MAX_NUM_WORKERS) \
+	--bucket=$(BUCKET) \
+	--extra_package=dist/print-nanny-dataflow-0.1.0.tar.gz \
+	--region=$(GCP_REGION)
+
+dataflow-cancel:
+	JOB_ID=$(shell gcloud dataflow jobs list --filter="name=$(JOB_NAME)" --status=active --format=json --region=$(GCP_REGION) | jq '.[].id')
+	gcloud dataflow jobs cancel $(JOB_ID) --region=$(GCP_REGION)
+
+dataflow-clean: dataflow-cancel dataflow
+
+dataflow-update: clean docker-image sdist
+	$(PYTHON) -m $(PIPELINE) \
+	--runner DataflowRunner \
+	--project=$(PROJECT) \
+	--experiment=use_runner_v2 \
+	--sdk_container_image=$(IMAGE) \
+	--temp_location=gs://$(BUCKET)/dataflow/tmp \
+	--job_name=$(JOB_NAME) \
+	​--setup_file=$(PWD)/setup.py \
+	--staging_location=gs://$(BUCKET)/dataflow/staging \
+	--streaming \
 	--max_num_workers=$(MAX_NUM_WORKERS) \
 	--bucket=$(BUCKET) \
 	--extra_package=dist/print-nanny-dataflow-0.1.0.tar.gz \
 	--region=$(GCP_REGION) \
+	--update \
 	--save_main_session
 
 lint:
