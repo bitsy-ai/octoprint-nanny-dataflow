@@ -24,29 +24,3 @@ class MeasureTimeDecorator(object):
 
     def __init__(self, namespace, name):
         self.time_distribution = Metrics.distribution(namespace, name)
-
-
-class FixedWindowMetricStart(DoFn):
-    def __init__(self, window_period: int, job_name: str):
-        self.window_period = window_period
-        self.job_name = job_name
-
-        self.session_count = Metrics.counter(job_name, "session_count")
-        self.seconds_elapsed_count = Metrics.counter(job_name, "seconds_elapsed")
-
-    def process(self, element):
-        self.session_count.inc()
-        self.seconds_elapsed_count.inc(self.window_period)
-        yield element
-
-
-class FixedWindowMetricEnd(DoFn):
-    def __init__(self, window_period: int, job_name: str):
-        self.window_period = window_period
-        self.job_name = job_name
-
-        self.session_count = Metrics.counter(job_name, "session_count")
-
-    def process(self, element):
-        self.session_count.dec()
-        yield element

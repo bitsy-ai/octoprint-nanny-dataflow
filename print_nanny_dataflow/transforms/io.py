@@ -2,16 +2,10 @@ import os
 import logging
 import pandas as pd
 import numpy as np
-from collections import Sequence
-from collections import OrderedDict
-from typing import Collection, Tuple, Any, Iterable, NamedTuple, List, Optional
+from typing import Tuple, Any, Iterable, NamedTuple
 import apache_beam as beam
 
-from google.protobuf.message import Message
 from print_nanny_client.protobuf.monitoring_pb2 import AnnotatedMonitoringImage
-from tensorflow_metadata.proto.v0 import schema_pb2
-from apache_beam.pvalue import PCollection
-from print_nanny_dataflow.coders.tfrecord_example import ExampleProtoEncoder
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +30,6 @@ class TypedPathMixin:
         datesegment: str,
         module: str,
         ext: str,
-        window_type: str,
         filename: str = "",
         protocol: str = "gs://",
     ) -> str:
@@ -56,7 +49,7 @@ class TypedPathMixin:
             bucket,
             base_path,
             module,
-            window_type,
+            # window_type,
             datesegment,
             key,
             ext,
@@ -72,14 +65,12 @@ class WriteWindowedTFRecord(TypedPathMixin, beam.DoFn):
         base_path: str,
         bucket: str,
         module,
-        window_type: str,
         ext: str = "tfrecord",
     ):
         self.base_path = base_path
         self.bucket = bucket
         self.module = module
         self.ext = ext
-        self.window_type = window_type
 
     def process(
         self,
@@ -87,7 +78,7 @@ class WriteWindowedTFRecord(TypedPathMixin, beam.DoFn):
             Any, Iterable[AnnotatedMonitoringImage]
         ] = beam.DoFn.ElementParam,
         window=beam.DoFn.WindowParam,
-    ) -> Iterable[Iterable[str]]:
+    ) -> Iterable[str]:
 
         key, elements = keyed_elements
         element = elements[0]  # type: ignore
@@ -104,7 +95,6 @@ class WriteWindowedTFRecord(TypedPathMixin, beam.DoFn):
             ext=self.ext,
             filename=filename,
             module=self.module,
-            window_type=self.window_type,
         )
 
         coder = beam.coders.coders.ProtoCoder(element.__class__)

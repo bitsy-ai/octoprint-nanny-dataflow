@@ -112,11 +112,8 @@ class FilterBoxAnnotations(beam.DoFn):
         self.calibration_base_path = calibration_base_path
         self.calibration_filename = calibration_filename
 
-    def load_calibration(
-        self, element: AnnotatedMonitoringImage
-    ) -> Optional[DeviceCalibration]:
+    def load_calibration(self, device_id: int) -> Optional[DeviceCalibration]:
         gcs_client = beam.io.gcp.gcsio.GcsIO()
-        device_id = element.monitoring_image.metadata.octoprint_device_id
         device_calibration_path = os.path.join(
             self.calibration_base_path, str(device_id), self.calibration_filename
         )
@@ -131,11 +128,13 @@ class FilterBoxAnnotations(beam.DoFn):
         return None
 
     def process(
-        self,
-        keyed_elements=Tuple[str, Iterable[AnnotatedMonitoringImage]],
+        self, keyed_elements: Tuple[str, Iterable[AnnotatedMonitoringImage]]
     ) -> Iterable[AnnotatedMonitoringImage]:
-        session, elements = keyed_elements
-        calibration = self.load_calibration(elements[0])
+        key, elements = keyed_elements
+        element = elements[0]  # type: ignore
+        calibration = self.load_calibration(
+            element.monitoring_image.metadata.octoprint_device_id
+        )
         return elements | beam.Map(
             lambda x: merge_filtered_annotations(x, calibration=calibration)
         )

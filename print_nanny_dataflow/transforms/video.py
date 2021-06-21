@@ -1,5 +1,4 @@
-from sys import modules
-from typing import Tuple, Iterable, NewType
+from typing import Tuple, Iterable
 import logging
 import io
 import os
@@ -7,16 +6,45 @@ import apache_beam as beam
 from print_nanny_dataflow.utils.visualization import (
     visualize_boxes_and_labels_on_image_array,
 )
+from apache_beam.options.pipeline_options import PipelineOptions
 from print_nanny_dataflow.coders.types import (
     CATEGORY_INDEX,
 )
 from print_nanny_dataflow.transforms.io import TypedPathMixin
 from print_nanny_client.protobuf.monitoring_pb2 import AnnotatedMonitoringImage
+from print_nanny_client.protobuf.alert_pb2 import VideoRenderRequest
 import PIL
 import numpy as np
 
 
 logger = logging.getLogger(__name__)
+
+
+@beam.typehints.with_input_types(bytes)
+@beam.typehints.with_output_types(VideoRenderRequest)
+class DecodeVideoRenderRequest(beam.DoFn):
+    def process(self, element: bytes) -> Iterable[VideoRenderRequest]:
+        parsed = VideoRenderRequest()
+        parsed.ParseFromString(element)
+        yield parsed
+
+
+@beam.typehints.with_input_types(Tuple[str, AnnotatedMonitoringImage])
+@beam.typehints.with_output_types(bytes)
+class EncodeVideoRenderRequest(beam.DoFn):
+    def process(
+        self, keyed_element: Tuple[str, AnnotatedMonitoringImage]
+    ) -> Iterable[bytes]:
+        key, element = keyed_element
+        datesegment = element.monitoring_image.metadata.print_session.datesegment
+        cdn_output_path = os.path.join(
+            "media/uploads/PrintSessionAlert", datesegment, key
+        )
+        msg = VideoRenderRequest(
+            cdn_output_path=cdn_output_path, metadata=element.monitoring_image.metadata
+        )
+        logger.info(f"***** EncodeVideoRenderRequest: {msg}")
+        yield msg.SerializeToString()
 
 
 @beam.typehints.with_input_types(AnnotatedMonitoringImage)
@@ -26,22 +54,22 @@ class WriteAnnotatedImage(TypedPathMixin, beam.DoFn):
         self,
         base_path: str,
         bucket: str,
+        pipeline_options: PipelineOptions,
         category_index=CATEGORY_INDEX,
         score_threshold=0.5,
         max_boxes_to_draw=10,
-        window_type="fixed",
         ext="jpg",
         module=(
             f"{AnnotatedMonitoringImage.__module__}.{AnnotatedMonitoringImage.__name__}"
         ),
     ):
+        self.pipeline_options = pipeline_options
         self.category_index = category_index
         self.score_threshold = score_threshold
         self.max_boxes_to_draw = max_boxes_to_draw
         self.base_path = base_path
         self.bucket = bucket
         self.ext = ext
-        self.window_type = window_type
         self.module = module
 
     def annotate_image(self, el: AnnotatedMonitoringImage) -> bytes:
@@ -99,21 +127,25 @@ class WriteAnnotatedImage(TypedPathMixin, beam.DoFn):
     ) -> Iterable[Tuple[str, str]]:
 
         key = element.monitoring_image.metadata.print_session.session
+        datesegment = element.monitoring_image.metadata.print_session.datesegment
+        filename = f"{element.monitoring_image.metadata.ts}.{self.ext}"
         outpath = self.path(
             bucket=self.bucket,
             base_path=self.base_path,
             key=key,
-            datesegment=element.monitoring_image.metadata.print_session.datesegment,
+            datesegment=datesegment,
             ext=self.ext,
-            filename=f"{element.monitoring_image.metadata.ts}.{self.ext}",
+            filename=filename,
             module=self.module,
-            window_type=self.window_type,
         )
         img = self.annotate_image(element)
-        gcs_client = beam.io.gcp.gcsio.GcsIO()
+        # gcs_client = beam.io.gcp.gcsio.GcsIO()
 
-        with gcs_client.open(outpath, "wb") as f:
-            logger.debug(f"Writing to {outpath}")
-            f.write(img)
-
+        # fs = beam.io.gcp.gcsfilesystem.GCSFileSystem(self.pipeline_options)
+        # with fs.create(outpath) as f:
+        # with gcs_client.open(outpath, "wb") as f:
+        # f.write(img)
+        writer = beam.io.filesystems.FileSystems.create(outpath)
+        writer.write(img)
+        writer.close()
         yield key, outpath

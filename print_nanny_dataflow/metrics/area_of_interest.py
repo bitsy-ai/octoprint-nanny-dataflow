@@ -66,7 +66,7 @@ def filter_area_of_interest(
 ) -> BoxAnnotations:
 
     percent_intersection = calc_percent_intersection(
-        element.detection_boxes, calibration.coordinates
+        element.detection_boxes, calibration.box.xy
     )
     ignored_mask = percent_intersection > min_calibration_area_overlap
 
