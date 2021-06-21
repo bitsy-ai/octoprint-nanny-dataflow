@@ -29,18 +29,21 @@ class DecodeVideoRenderRequest(beam.DoFn):
         yield parsed
 
 
-@beam.typehints.with_input_types(AnnotatedMonitoringImage)
+@beam.typehints.with_input_types(Tuple[str, AnnotatedMonitoringImage])
 @beam.typehints.with_output_types(bytes)
 class EncodeVideoRenderRequest(beam.DoFn):
-    def process(self, element: AnnotatedMonitoringImage) -> Iterable[bytes]:
+    def process(
+        self, keyed_element: Tuple[str, AnnotatedMonitoringImage]
+    ) -> Iterable[bytes]:
+        key, element = keyed_element
         datesegment = element.monitoring_image.metadata.print_session.datesegment
-        key = element.monitoring_image.metadata.print_session.session
         cdn_output_path = os.path.join(
             "media/uploads/PrintSessionAlert", datesegment, key
         )
         msg = VideoRenderRequest(
             cdn_output_path=cdn_output_path, metadata=element.monitoring_image.metadata
         )
+        logger.info(f"***** EncodeVideoRenderRequest: {msg}")
         yield msg.SerializeToString()
 
 
@@ -142,7 +145,6 @@ class WriteAnnotatedImage(TypedPathMixin, beam.DoFn):
         # with fs.create(outpath) as f:
         # with gcs_client.open(outpath, "wb") as f:
         # f.write(img)
-        logger.info(f"Writing {outpath} to gcs")
         writer = beam.io.filesystems.FileSystems.create(outpath)
         writer.write(img)
         writer.close()

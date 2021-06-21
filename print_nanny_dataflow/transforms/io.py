@@ -49,6 +49,7 @@ class TypedPathMixin:
             bucket,
             base_path,
             module,
+            # window_type,
             datesegment,
             key,
             ext,
@@ -74,18 +75,12 @@ class WriteWindowedTFRecord(TypedPathMixin, beam.DoFn):
     def process(
         self,
         keyed_elements: Tuple[
-            str, Iterable[AnnotatedMonitoringImage]
+            Any, Iterable[AnnotatedMonitoringImage]
         ] = beam.DoFn.ElementParam,
         window=beam.DoFn.WindowParam,
-        pane_info=beam.DoFn.PaneInfoParam,
-    ) -> Iterable[Iterable[str]]:
+    ) -> Iterable[str]:
 
         key, elements = keyed_elements
-        if len(elements) == 0:
-            import pdb
-
-            pdb.set_trace()
-            return
         element = elements[0]  # type: ignore
 
         window_start = int(window.start)

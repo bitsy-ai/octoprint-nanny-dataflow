@@ -34,7 +34,7 @@ from print_nanny_client.protobuf.monitoring_pb2 import (
 
 from print_nanny_dataflow.transforms.io import TypedPathMixin
 from print_nanny_dataflow.transforms.video import WriteAnnotatedImage
-from print_nanny_dataflow.metrics import SessionCountTimeElapsed
+from print_nanny_client.protobuf.alert_pb2 import VideoRenderRequest
 
 logger = logging.getLogger(__name__)
 
@@ -43,14 +43,6 @@ def add_timestamp(element: MonitoringImage):
     import apache_beam as beam
 
     return beam.window.TimestampedValue(element, element.metadata.ts)
-
-
-class MaybeEncodeVideoRenderRequest(TypedPathMixin, beam.DoFn):
-    def process(self, keyed_elements, pane_info=beam.DoFn.PaneInfoParam):
-        logger.info(f"OnWindowTrigger{pane_info}")
-        if pane_info.is_last:
-            key, elements = keyed_elements
-            yield elements | beam.ParDo(EncodeVideoRenderRequest())
 
 
 if __name__ == "__main__":
@@ -186,10 +178,6 @@ if __name__ == "__main__":
         | "Group FixedWindow by key" >> beam.GroupByKey()
     )
 
-    metrics = fixed_window_view_by_key | beam.ParDo(
-        SessionCountTimeElapsed(job_name="sliding-window-health")
-    )
-
     annotated_images = (
         fixed_window_view_by_key
         | beam.ParDo(
@@ -217,136 +205,22 @@ if __name__ == "__main__":
         )
     )
 
-    # fixed_window_view_by_key | beam.Map(
-    #     lambda key: print(f"Processed {len(key[1])} for session {key[0]}")
-    # )
-
-    # _ = (
-    #     fixed_window_view_by_key
-    #     | "Calculate metrics over fixed window intervals"
-    #     >> beam.ParDo(FixedWindowMetricStart(args.health_window_period, "print_health"))
-    # )
-
-    # _ = (
-    #     fixed_window_view_by_key
-    #     | "Filter area of interest and detections above threshold"
-    #     >> beam.ParDo(
-    #         FilterBoxAnnotations(
-    #             calibration_base_path,
-    #         )
-    #     )
-    #     | "Write annotated jpgs"
-    #     >> beam.ParDo(
-    #         WriteAnnotatedImage(
-    #             base_path=args.base_gcs_path,
-    #             bucket=args.bucket,
-    #             score_threshold=args.min_score_threshold,
-    #             max_boxes_to_draw=args.max_boxes_to_draw,
-    #             window_type=beam.transforms.window.FixedWindows.__name__,
-    #         )
-    #     )
-    # )
-
-    # # packed tfrecords for training dataset
-    # _ = fixed_window_view_by_key | "Write FixedWindow TFRecords" >> beam.ParDo(
-    #     WriteWindowedTFRecord(
-    #         base_path=args.base_gcs_path,
-    #         bucket=args.bucket,
-    #         module=f"{AnnotatedMonitoringImage.__module__}.{AnnotatedMonitoringImage.__name__}",
-    #         window_type=beam.transforms.window.FixedWindows.__name__,
-    #     )
-    # )
-
     # render video after session is finished
     session_gap = args.health_window_period
-    # trigger_fn = beam.transforms.trigger.Repeatedly(
-    #     beam.transforms.trigger.AfterAny(
-    #         beam.transforms.trigger.AfterCount(args.buffer_limit),
-    #         beam.transforms.trigger.AfterProcessingTime(args.health_window_period),
-    #         beam.transforms.trigger.AfterWatermark(),
-    #     )
-    # )
-    sessions_grouped_by_key = (
+    sessions_latest_by_key = (
         parsed_dataset_by_session
         | beam.WindowInto(
             beam.transforms.window.Sessions(session_gap),
-            # TODO re-enable with MonitorHealthStateful
             # trigger=trigger_fn,
-            accumulation_mode=beam.transforms.trigger.AccumulationMode.DISCARDING,
         )
-        | beam.GroupByKey()
-        # | beam.ParDo(
-        #     OnWindowTrigger(
-        #         bucket=args.bucket,
-        #         output_topic_path=output_topic_path,
-        #         output_gcs_path=args.base_gcs_path,
-        #         calibration_base_path=calibration_base_path,
-        #         min_score_threshold=args.min_score_threshold,
-        #         max_boxes_to_draw=args.max_boxes_to_draw,
-        #     )
-        # )
-        # | "Stateful health score threshold monitor"
-        # >> beam.ParDo(MonitorHealthStateful(output_topic_path))
+        | beam.combiners.Latest.PerKey()
     )
 
-    render_video_request = sessions_grouped_by_key | beam.ParDo(
-        MaybeEncodeVideoRenderRequest()
+    render_video_request = (
+        sessions_latest_by_key
+        | beam.ParDo(EncodeVideoRenderRequest())
+        | beam.io.WriteToPubSub(output_topic_path)
     )
-
-    # explode nested arrays for analysis & indexing with hive
-    # _ = fixed_window_view_by_key | "Write FixedWindow Parquet" >> beam.ParDo(
-    #     WriteWindowedParquet(
-    #         args.base_gcs_path,
-    #         bucket=args.bucket,
-    #         module=f"{AnnotatedMonitoringImage.__module__}.{AnnotatedMonitoringImage.__name__}"
-    #     )
-    # )
-
-    # sliding_window_view = parsed_dataset | "Add sliding window" >> beam.WindowInto(
-    #     beam.transforms.window.SlidingWindows(
-    #         args.health_window_size, args.health_window_period
-    #     ),
-    #     accumulation_mode=beam.transforms.trigger.AccumulationMode.ACCUMULATING,
-    # )
-
-    # _ = (
-    #     sliding_window_view
-    #     | "Write SlidingWindow ExplodeWindowedHealthRecord Parquet (unfilterd)"
-    #     >> beam.ParDo(ExplodeWindowedHealthRecord())
-    #     | "Group unfiltered health records by key" >> beam.GroupBy("print_session")
-    #     | "Write SlidingWindow Parquet"
-    #     >> beam.ParDo(
-    #         WriteWindowedParquet(
-    #             args.base_gcs_path,
-    #             WindowedHealthRecord.pyarrow_schema(),
-    #             record_type="WindowedHealthRecord/parquet",
-    #         )
-    #     )
-    # )
-
-    # filtered_health_dataframe = (
-    #     sliding_window_view
-    #     | "Drop image data" >> beam.Map(lambda v: v.drop_image_data())
-    #     | "Group alert pipeline by session" >> beam.GroupBy("print_session")
-    #     | "Filter detections below threshold & outside area of interest"
-    #     >> beam.ParDo(FilterAreaOfInterest(calibration_base_path))
-    #     | beam.ParDo(ExplodeWindowedHealthRecord())
-    #     | "Windowed health DataFrame" >> beam.GroupBy("print_session")
-    #     | beam.ParDo(SortWindowedHealthDataframe())
-    #     | beam.GroupByKey()
-    # )
-
-    # _ = (
-    #     filtered_health_dataframe
-    #     | "Write SlidingWindow (calibration & threshold filtered) Parquet"
-    #     >> beam.ParDo(
-    #         WriteWindowedParquet(
-    #             args.base_gcs_path,
-    #             NestedWindowedHealthTrend.pyarrow_schema(),
-    #             record_type="NestedWindowedHealthTrend/parquet",
-    #         )
-    #     )
-    # )
 
     result = p.run()
     if args.runner == "DirectRunner":

@@ -51,7 +51,6 @@ class ParseMonitoringImage(beam.DoFn):
     def process(self, element: bytes) -> Iterable[MonitoringImage]:
         parsed = MonitoringImage()
         parsed.ParseFromString(element)
-        logger.info(f"Received monitoring image with ts={parsed.metadata.ts}")
         yield parsed
 
 
