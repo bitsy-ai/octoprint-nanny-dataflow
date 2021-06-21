@@ -43,12 +43,16 @@ jobs:
         run: gcloud auth activate-service-account $GCP_SERVICE_ACCOUNT --key-file=key.json
       - name: Configure docker registry credentials
         run: gcloud auth configure-docker
-
+      - name: Cancel Jobs
+        continue-on-error: true
+        run: |
+          make dataflow-cancel PIPELINE=print_nanny_dataflow.pipelines.video_render
+          make dataflow-cancel PIPELINE=print_nanny_dataflow.pipelines.sliding_window_health
       - name: Deploy Video Render Pipeline
         run: |
           source .venv/bin/activate
-          make dataflow-clean PROJECT=print-nanny PIPELINE=print_nanny_dataflow.pipelines.video_render JOB_NAME=video-render BUCKET=print-nanny-prod
+          make dataflow PROJECT=print-nanny PIPELINE=print_nanny_dataflow.pipelines.video_render JOB_NAME=video-render BUCKET=print-nanny-prod
       - name: Deploy Sliding Health Pipeline
         run: |
           source .venv/bin/activate
-          make dataflow-clean PROJECT=print-nanny PIPELINE=print_nanny_dataflow.pipelines.sliding_window_health JOB_NAME=sliding-window-health BUCKET=print-nanny-prod
+          make dataflow PROJECT=print-nanny PIPELINE=print_nanny_dataflow.pipelines.sliding_window_health JOB_NAME=sliding-window-health BUCKET=print-nanny-prod
