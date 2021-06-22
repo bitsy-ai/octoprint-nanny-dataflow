@@ -55,21 +55,27 @@ class RenderVideo(TypedPathMixin, beam.DoFn):
             "gs://", self.bucket, msg.cdn_output_path, filename
         )
 
-        val = subprocess.run(
-            [
-                script,
-                "-i",
-                input_path,
-                "-o",
-                output_path,
-                "-c",
-                cdn_output_path,
-            ],
-            stdout=logger.info,
-            stderr=logger.error,
-        )
-        logger.info(val)
-        yield msg.SerializeToString()
+        try:
+            result = subprocess.run(
+                [
+                    script,
+                    "-i",
+                    input_path,
+                    "-o",
+                    output_path,
+                    "-c",
+                    cdn_output_path,
+                ],
+                check=True,
+                capture_output=True,
+            )
+            logger.info(result.stdout)
+            logger.warning(result.stderr)
+            yield msg.SerializeToString()
+        except subprocess.CalledProcessError as e:
+            logger.error(f"returncode={e.returncode} running cmd {e.cmd}")
+            logger.info(e.stdout)
+            logger.info(e.stderr)
 
 
 if __name__ == "__main__":
