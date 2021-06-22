@@ -55,7 +55,7 @@ class RenderVideo(TypedPathMixin, beam.DoFn):
             "gs://", self.bucket, msg.cdn_output_path, filename
         )
 
-        val = subprocess.check_call(
+        val = subprocess.run(
             [
                 script,
                 "-i",
@@ -64,7 +64,9 @@ class RenderVideo(TypedPathMixin, beam.DoFn):
                 output_path,
                 "-c",
                 cdn_output_path,
-            ]
+            ],
+            stdout=logger.info,
+            stderr=logger.error,
         )
         logger.info(val)
         yield msg.SerializeToString()
