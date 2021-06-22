@@ -76,6 +76,7 @@ class RenderVideo(TypedPathMixin, beam.DoFn):
             logger.error(f"returncode={e.returncode} running cmd {e.cmd}")
             logger.info(e.stdout)
             logger.info(e.stderr)
+            raise e
 
 
 if __name__ == "__main__":
