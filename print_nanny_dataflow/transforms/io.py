@@ -98,15 +98,12 @@ class WriteWindowedTFRecord(TypedPathMixin, beam.DoFn):
         )
 
         coder = beam.coders.coders.ProtoCoder(element.__class__)
-        yield (
-            elements
-            | beam.io.tfrecordio.WriteToTFRecord(
-                file_path_prefix=outpath,
-                num_shards=1,
-                shard_name_template="",
-                coder=coder,
-                file_name_suffix=".tfrecords.gz",
-            )
+        return elements | beam.io.tfrecordio.WriteToTFRecord(
+            file_path_prefix=outpath,
+            num_shards=1,
+            shard_name_template="",
+            coder=coder,
+            file_name_suffix=".tfrecords.gz",
         )
 
 
