@@ -7,6 +7,8 @@ PIP=.venv/bin/pip
 PROJECT ?= "print-nanny-sandbox"
 PRINT_NANNY_API_URL ?= "http://localhost:8000/api"
 JOB_NAME ?= "sliding-window-health"
+JOB_ID ?= $(shell gcloud dataflow jobs list --filter="name=$(JOB_NAME)" --status=active --format=json --region=$(GCP_REGION) | jq '.[].id')
+
 PIPELINE ?= "print_nanny_dataflow.pipelines.sliding_window_health"
 GIT_SHA ?= $(shell git rev-parse HEAD)
 IMAGE ?= "gcr.io/${PROJECT}/print-nanny-dataflow:${GIT_SHA}"
@@ -73,8 +75,8 @@ dataflow: clean docker-image sdist
 	--runner DataflowRunner \
 	--project=$(PROJECT) \
 	--experiment=use_runner_v2 \
-	--sdk_container_image=$(IMAGE) \
-	--temp_location=gs://$(BUCKET)/dataflow/tmp \
+  	--worker_harness_container_image=$(IMAGE) \
+  	--temp_location=gs://$(BUCKET)/dataflow/tmp \
 	--job_name=$(JOB_NAME) \
 	​--setup_file=$(PWD)/setup.py \
 	--staging_location=gs://$(BUCKET)/dataflow/staging \
@@ -87,7 +89,6 @@ dataflow: clean docker-image sdist
 
 
 dataflow-cancel:
-	JOB_ID=$(shell gcloud dataflow jobs list --filter="name=$(JOB_NAME)" --status=active --format=json --region=$(GCP_REGION) | jq '.[].id')
 	gcloud dataflow jobs cancel $(JOB_ID) --region=$(GCP_REGION)
 
 dataflow-clean: dataflow-cancel dataflow
@@ -97,7 +98,7 @@ dataflow-update: clean docker-image sdist
 	--runner DataflowRunner \
 	--project=$(PROJECT) \
 	--experiment=use_runner_v2 \
-	--sdk_container_image=$(IMAGE) \
+	--worker_harness_container_imag=$(IMAGE) \
 	--temp_location=gs://$(BUCKET)/dataflow/tmp \
 	--job_name=$(JOB_NAME) \
 	​--setup_file=$(PWD)/setup.py \
