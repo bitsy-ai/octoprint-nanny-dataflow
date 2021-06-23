@@ -87,7 +87,7 @@ google-auth-oauthlib==0.4.4
     # via
     #   gcsfs
     #   tensorboard
-google-auth==1.31.0
+google-auth==1.32.0
     # via
     #   apache-beam
     #   gcsfs
@@ -205,13 +205,13 @@ packaging==20.9
     # via
     #   google-api-core
     #   google-cloud-bigquery
-pandas==1.2.4
+pandas==1.2.5
     # via
     #   print-nanny-dataflow (setup.py)
     #   tfx-bsl
 pillow==8.2.0
     # via print-nanny-dataflow (setup.py)
-print-nanny-client==0.7.0.dev27
+print-nanny-client==0.7.1
     # via print-nanny-dataflow (setup.py)
 proto-plus==1.18.1
     # via google-cloud-bigquery
