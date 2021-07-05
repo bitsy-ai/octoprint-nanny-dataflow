@@ -206,7 +206,7 @@ if __name__ == "__main__":
     )
 
     # render video after session is finished
-    session_gap = args.health_window_period
+    session_gap = args.health_window_period * 2
     sessions_latest_by_key = (
         parsed_dataset_by_session
         | beam.WindowInto(
