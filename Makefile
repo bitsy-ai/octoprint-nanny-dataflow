@@ -14,7 +14,7 @@ GIT_SHA ?= $(shell git rev-parse HEAD)
 IMAGE ?= "gcr.io/${PROJECT}/print-nanny-dataflow:${GIT_SHA}"
 BUCKET ?= "print-nanny-sandbox"
 MAX_NUM_WORKERS ?= 1
-MACHINE_TYPE ?= g1-small
+MACHINE_TYPE ?= e2-medium
 GCP_REGION ?= "us-central1"
 
 mypy:
