@@ -51,8 +51,8 @@ jobs:
       - name: Deploy Video Render Pipeline
         run: |
           source .venv/bin/activate
-          make dataflow PROJECT=print-nanny PIPELINE=print_nanny_dataflow.pipelines.video_render JOB_NAME=video-render BUCKET=print-nanny-prod
+          make dataflow PROJECT=print-nanny PIPELINE=print_nanny_dataflow.pipelines.video_render JOB_NAME=video-render BUCKET=print-nanny-prod MACHINE_TYPE=g1-small
       - name: Deploy Sliding Health Pipeline
         run: |
           source .venv/bin/activate
-          make dataflow PROJECT=print-nanny PIPELINE=print_nanny_dataflow.pipelines.sliding_window_health JOB_NAME=sliding-window-health BUCKET=print-nanny-prod
+          make dataflow PROJECT=print-nanny PIPELINE=print_nanny_dataflow.pipelines.sliding_window_health JOB_NAME=sliding-window-health BUCKET=print-nanny-prod MACHINE_TYPE=g1-small
