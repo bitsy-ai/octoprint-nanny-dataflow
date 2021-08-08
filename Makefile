@@ -13,7 +13,8 @@ PIPELINE ?= "print_nanny_dataflow.pipelines.sliding_window_health"
 GIT_SHA ?= $(shell git rev-parse HEAD)
 IMAGE ?= "gcr.io/${PROJECT}/print-nanny-dataflow:${GIT_SHA}"
 BUCKET ?= "print-nanny-sandbox"
-MAX_NUM_WORKERS ?= 2
+MAX_NUM_WORKERS ?= 1
+MACHINE_TYPE ?= n1-standard-1
 GCP_REGION ?= "us-central1"
 
 mypy:
@@ -85,7 +86,8 @@ dataflow: clean docker-image sdist
 	--bucket=$(BUCKET) \
 	--extra_package=dist/print-nanny-dataflow-0.1.0.tar.gz \
 	--region=$(GCP_REGION) \
-	--save_main_session
+	--save_main_session \
+	--machine_type=$(MACHINE_TYPE)
 
 
 dataflow-cancel:
