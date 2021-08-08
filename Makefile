@@ -111,7 +111,8 @@ dataflow-update: clean docker-image sdist
 	--extra_package=dist/print-nanny-dataflow-0.1.0.tar.gz \
 	--region=$(GCP_REGION) \
 	--update \
-	--save_main_session
+	--save_main_session \
+	--machine_type=$(MACHINE_TYPE)
 
 lint:
 	$(PYTHON) -m black setup.py print_nanny_dataflow conftest.py tests
